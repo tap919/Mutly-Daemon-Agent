@@ -17,7 +17,8 @@ vi.mock('@google/genai', () => {
       models = {
         generateContent: mockGenerateContent
       }
-    }
+    },
+    Type: { /* Type definition here (customize based on actual usage) */ }
   };
 });
 

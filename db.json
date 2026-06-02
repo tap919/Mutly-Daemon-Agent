@@ -1,0 +1,201 @@
+{
+  "logs": [
+    {
+      "id": "95f00357-cc85-4489-82f0-a32195d2547f",
+      "time": "14:14:18",
+      "msg": "Analysis of [local_workspace] complete. Synthesized optimization plan.",
+      "type": "success"
+    },
+    {
+      "id": "effb4913-5394-4765-8266-be9744acf014",
+      "time": "14:14:18",
+      "msg": "AI analysis fallback engaged: Cannot read properties of undefined (reading 'text')",
+      "type": "warning"
+    },
+    {
+      "id": "2abbb2ca-3c23-47a2-94c4-bfebfb0743f0",
+      "time": "14:14:18",
+      "msg": "Initiating deep parsing of local workspace...",
+      "type": "system"
+    },
+    {
+      "id": "5fca8a82-c7e6-403c-b61a-daadbea05dcb",
+      "time": "14:14:18",
+      "msg": "Injected custom optimization execution plan: pln_opt_1780424058669",
+      "type": "system"
+    },
+    {
+      "id": "78182451-95e9-482d-9195-50314e2da397",
+      "time": "14:14:18",
+      "msg": "Analysis of [local_workspace] complete. Synthesized optimization plan.",
+      "type": "success"
+    },
+    {
+      "id": "1815b62f-51d0-47f4-9ff8-5189455a2384",
+      "time": "14:14:18",
+      "msg": "AI analysis fallback engaged: Cannot read properties of undefined (reading 'text')",
+      "type": "warning"
+    },
+    {
+      "id": "159e50ae-f7b9-4ee4-bd37-96f24e0611da",
+      "time": "14:14:18",
+      "msg": "Initiating deep parsing of local workspace...",
+      "type": "system"
+    },
+    {
+      "id": "c030995f-c6be-4bb8-a937-36f2e6cd451a",
+      "time": "14:14:18",
+      "msg": "Token Compaction complete: Dream complete",
+      "type": "system"
+    },
+    {
+      "id": "39006d60-913f-404a-a3e8-8911f5523c7a",
+      "time": "14:14:18",
+      "msg": "Context Token Compaction sequence started.",
+      "type": "system"
+    },
+    {
+      "id": "9458c199-3a99-4273-a78b-126003ad0c80",
+      "time": "14:14:18",
+      "msg": "REPL execution plan generated successfully.",
+      "type": "success"
+    },
+    {
+      "id": "1797ff76-8cbd-4bfc-bd7c-a3188570cc06",
+      "time": "14:14:18",
+      "msg": "Initiating REPL execution tree generation...",
+      "type": "info"
+    },
+    {
+      "id": "21823928-136a-412d-818b-08213ec68bd4",
+      "time": "14:04:05",
+      "msg": "Analysis of [local_workspace] complete. Synthesized optimization plan.",
+      "type": "success"
+    },
+    {
+      "id": "8e5c0496-c7da-4858-8633-20f223e04cc9",
+      "time": "14:04:05",
+      "msg": "AI analysis fallback engaged: Cannot read properties of undefined (reading 'text')",
+      "type": "warning"
+    },
+    {
+      "id": "0fe7de25-b1a3-4c76-b238-e75baa564132",
+      "time": "14:04:05",
+      "msg": "Initiating deep parsing of local workspace...",
+      "type": "system"
+    },
+    {
+      "id": "6989c3ae-c105-4d8b-88b8-48167b21b77a",
+      "time": "14:04:05",
+      "msg": "Injected custom optimization execution plan: pln_opt_1780423445583",
+      "type": "system"
+    },
+    {
+      "id": "9062b33c-9c07-4f82-8f85-352b4f8387c2",
+      "time": "14:04:05",
+      "msg": "Analysis of [local_workspace] complete. Synthesized optimization plan.",
+      "type": "success"
+    },
+    {
+      "id": "1ae6b764-1bdf-4ed3-8c51-a0272a019b17",
+      "time": "14:04:05",
+      "msg": "AI analysis fallback engaged: Cannot read properties of undefined (reading 'text')",
+      "type": "warning"
+    },
+    {
+      "id": "f00bf10f-3128-4364-a474-f778722b0bfa",
+      "time": "14:04:05",
+      "msg": "Initiating deep parsing of local workspace...",
+      "type": "system"
+    },
+    {
+      "id": "59b6bb67-c984-44f1-8976-b9bb5f51300c",
+      "time": "14:04:05",
+      "msg": "Token Compaction complete: Dream complete",
+      "type": "system"
+    },
+    {
+      "id": "76232b46-0806-47f2-a573-19fc04611184",
+      "time": "14:04:05",
+      "msg": "Context Token Compaction sequence started.",
+      "type": "system"
+    },
+    {
+      "id": "ad7ff5f8-1a78-4164-b673-dc3ee9c8f4f1",
+      "time": "14:04:05",
+      "msg": "REPL execution plan generated successfully.",
+      "type": "success"
+    },
+    {
+      "id": "413e4337-c018-495a-99b8-fa800b4d6987",
+      "time": "14:04:05",
+      "msg": "Initiating REPL execution tree generation...",
+      "type": "info"
+    },
+    {
+      "id": "52c9c692-ef99-4dd0-a201-3431d89a25af",
+      "time": "08:13:43",
+      "msg": "Analysis of [local_workspace] complete. Synthesized optimization plan.",
+      "type": "success"
+    },
+    {
+      "id": "fed43e1f-6159-4ebd-a9c3-36d56cf682da",
+      "time": "08:13:43",
+      "msg": "AI analysis fallback engaged: Cannot read properties of undefined (reading 'text')",
+      "type": "warning"
+    },
+    {
+      "id": "7bdfef07-774e-478b-a99a-06aa5e0dd145",
+      "time": "08:13:43",
+      "msg": "Initiating deep parsing of local workspace...",
+      "type": "system"
+    },
+    {
+      "id": "ddf010d6-6147-421d-b2fe-7444427db907",
+      "time": "08:13:42",
+      "msg": "Injected custom optimization execution plan: pln_opt_1780402422968",
+      "type": "system"
+    },
+    {
+      "id": "4e6736b2-e073-4edb-9696-7d4261bfeab6",
+      "time": "08:13:42",
+      "msg": "Analysis of [local_workspace] complete. Synthesized optimization plan.",
+      "type": "success"
+    }
+  ],
+  "microChanges": [],
+  "currentPlan": {
+    "success": true,
+    "planId": "pln_opt_1780424058669",
+    "message": "Targeting redundant loops",
+    "tree": [
+      {
+        "id": "cust_1",
+        "step": "Prune active websocket sync",
+        "risk": "Medium",
+        "status": "pending"
+      }
+    ]
+  },
+  "currentPhase": "Analysis Complete",
+  "state": {
+    "memory": {
+      "contextWindow": 45,
+      "specAlignment": 98,
+      "reflectiveCapacity": 100,
+      "vectorDbHits": 14670,
+      "activeGraphStates": 64
+    },
+    "sandbox": {
+      "node": "ACTIVE",
+      "python": "SUSPENDED",
+      "rust": "IDLE",
+      "activeTasks": 0
+    },
+    "injector": {
+      "totalAnchored": 142
+    }
+  },
+  "secureKey": "2708393201ab4538bf1647ac6e630522",
+  "sandboxLogs": []
+}

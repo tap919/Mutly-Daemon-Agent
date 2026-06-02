@@ -7,6 +7,13 @@ import type { LogEntry, MicroChange, ExecutionPlan, AgentStatus, RepositoryAnaly
 import { cosineSimilarity } from "./vectorEngine.js";
 import type { EmbeddingChunk, FileEmbeddingMeta } from "./vectorEngine.js";
 import { clearFolder, copyFolder, executeIsolatedCommand } from "./sandboxEngine.js";
+import { ToolRegistry } from "./tools/toolRegistry.js";
+import { nativeTools } from "./tools/native/index.js";
+import { vibeserveTools, vsMemoryGetTool, vsMemoryStoreTool, vsSchemaValidateTool } from "./tools/mcp/vibeserveTools.js";
+import { vsPlanReviewTool, vsGenerateArtifactTool, vsValidateArtifactTool } from "./tools/mcp/vibeservePlanningTools.js";
+import { augmentPlan, generateArtifact, getAugmentationConfig, type AugmentationResult } from "./planning/planAugmenter.js";
+import type { ToolContext } from "./tools/types.js";
+import { ReporankAuditService } from "./audit/reporankAuditService.ts";
 
 const dbPath = path.resolve(process.cwd(), "db.json");
 const specFilePath = path.resolve(process.cwd(), "SPEC.md");
@@ -74,6 +81,7 @@ export class AgentDaemon {
   public indexingState = "idle";
   public sandboxStatus = "idle";
   public sandboxActiveCommand = "";
+  public reporankAuditService: ReporankAuditService;
   
   private lastModifiedMap = new Map<string, number>();
 
@@ -127,6 +135,9 @@ export class AgentDaemon {
       console.error("FileSystem specifications failed:", e);
     }
 
+    // Initialize reporank audit service
+    this.reporankAuditService = new ReporankAuditService();
+
     // Load persistent state database
     this.loadState();
 
@@ -141,6 +152,9 @@ export class AgentDaemon {
     if (this.logs.length === 0) {
       this.addLog("info", "Daemon initialized and listening.");
     }
+
+    // Perform initial audit on startup
+    this.performStartupAudit().catch(console.error);
 
     // Start background thread logic
     this.start();
@@ -304,16 +318,67 @@ export class AgentDaemon {
     }
   }
 
-  public toggleAutonomous() {
-    if (this.currentPhase === "Autonomous Execution") {
-      this.currentPhase = "Idle";
-      this.addLog("system", "Autonomous loop disabled. Standing by.");
-    } else {
-      this.currentPhase = "Autonomous Execution";
-      this.addLog("system", "Autonomous loop initiated. Monitoring workspace.");
+    public toggleAutonomous() {
+      if (this.currentPhase === "Autonomous Execution") {
+        this.currentPhase = "Idle";
+        this.addLog("system", "Autonomous loop disabled. Standing by.");
+      } else {
+        this.currentPhase = "Autonomous Execution";
+        this.addLog("system", "Autonomous loop initiated. Monitoring workspace.");
+      }
+      this.saveState();
     }
-    this.saveState();
-  }
+
+    /**
+     * Perform an audit using reporank and log the results
+     */
+    public async performAudit(): Promise<void> {
+      try {
+        this.currentPhase = "Audit";
+        this.addLog("info", "Starting RepoRank audit of workspace...");
+        
+        const auditReport = await this.reporankAuditService.auditWorkspace();
+        
+        // Log audit results
+        this.addLog("info", `RepoRank audit completed. Score: ${auditReport.score}/100`);
+        this.addLog("info", `Files analyzed: ${auditReport.files}`);
+        this.addLog("info", `Secrets found: ${auditReport.secrets.secretsFound}`);
+        
+        if (auditReport.vibe.recommendations.length > 0) {
+          this.addLog("warning", `RepoRank recommendations: ${auditReport.vibe.recommendations.join("; ")}`);
+        }
+        
+        // Update state based on audit score
+        if (auditReport.score >= 80) {
+          this.addLog("success", "Workspace audit passed with excellent score");
+        } else if (auditReport.score >= 60) {
+          this.addLog("warning", "Workspace audit passed but could be improved");
+        } else {
+          this.addLog("error", "Workspace audit failed - critical issues found");
+        }
+        
+        this.currentPhase = "Idle";
+        this.saveState();
+      } catch (error) {
+        this.addLog("error", `RepoRank audit failed: ${error.message}`);
+        this.currentPhase = "Error";
+        this.saveState();
+      }
+    }
+
+    /**
+     * Perform initial audit on startup (non-blocking)
+     */
+    private async performStartupAudit(): Promise<void> {
+      try {
+        // Run audit in background without blocking startup
+        setTimeout(async () => {
+          await this.performAudit();
+        }, 5000); // Delay 5 seconds to let startup complete first
+      } catch (error) {
+        console.error(`Failed to schedule startup audit: ${error.message}`);
+      }
+    }
 
   public getStatus(): AgentStatus {
     return {
@@ -341,62 +406,66 @@ export class AgentDaemon {
     this.saveState();
   }
 
-  public async generatePlan(): Promise<ExecutionPlan> {
-    this.currentPhase = "Planning";
-    this.addLog("info", "Initiating REPL execution tree generation...");
-    this.saveState();
-    
-    try {
-      if (!process.env.GEMINI_API_KEY) {
-         throw new Error("GEMINI_API_KEY is not set.");
-      }
+   public async generatePlan(): Promise<ExecutionPlan> {
+     this.currentPhase = "Planning";
+     this.addLog("info", "Initiating REPL execution tree generation...");
+     this.saveState();
+     
+     try {
+       if (!process.env.GEMINI_API_KEY) {
+          throw new Error("GEMINI_API_KEY is not set.");
+       }
 
-      const prompt = `You are the REPL Engine. Review the SPEC.md and CLAUDE.md below, and create a single-threaded deterministic action plan as a JSON object with this schema:
-{
-  "message": "reasoning or constraints check",
-  "tree": [
-    { "id": 1, "step": "exact bash/grep command to run", "risk": "Low", "status": "pending" }
-  ]
-}
+       const prompt = `You are the REPL Engine. Review the SPEC.md and CLAUDE.md below, and create a single-threaded deterministic action plan as a JSON object with this schema:
+       {
+         "message": "reasoning or constraints check",
+         "tree": [
+           { "id": 1, "step": "exact bash/grep command to run", "risk": "Low", "status": "pending" }
+         ]
+       }
 
-SPEC.md:
-${this.spec}
+       SPEC.md:
+       ${this.spec}
 
-CLAUDE.md:
-${this.claude}
-`;
+       CLAUDE.md:
+       ${this.claude}
+       `;
 
-      const response = await this.getAi().models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-        }
-      });
+       const response = await this.getAi().models.generateContent({
+         model: "gemini-2.5-flash",
+         contents: prompt,
+         config: {
+           responseMimeType: "application/json",
+         }
+       });
 
-      const data = JSON.parse(response.text || "{}");
-      this.currentPlan = {
-        success: true,
-        planId: "pln_" + Date.now(),
-        message: data.message || "REPL execution planned.",
-        tree: (data.tree || []).map((t: any) => ({
-          ...t,
-          status: t.status || "pending"
-        }))
-      };
+       const data = JSON.parse(response.text || "{}");
+       this.currentPlan = {
+         success: true,
+         planId: "pln_" + Date.now(),
+         message: data.message || "REPL execution planned.",
+         tree: (data.tree || []).map((t: any) => ({
+           ...t,
+           status: t.status || "pending"
+         }))
+       };
 
-      this.currentPhase = "Pending Review";
-      this.addLog("success", "REPL execution plan generated successfully.");
-      this.saveState();
-      return this.currentPlan;
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.addLog("error", `REPL plan generation failed: ${errMsg}`);
-      this.currentPhase = "Error";
-      this.saveState();
-      throw err;
-    }
-  }
+       this.currentPhase = "Pending Review";
+       this.addLog("success", "REPL execution plan generated successfully.");
+       this.saveState();
+       
+       // Perform audit after plan generation
+       this.performAudit().catch(console.error);
+       
+       return this.currentPlan;
+     } catch (err: unknown) {
+       const errMsg = err instanceof Error ? err.message : String(err);
+       this.addLog("error", `REPL plan generation failed: ${errMsg}`);
+       this.currentPhase = "Error";
+       this.saveState();
+       throw err;
+     }
+   }
 
   public lastAnalysis: RepositoryAnalysis | null = null;
 
@@ -583,78 +652,38 @@ Strict rules:
         }
       ];
 
+      const toolRegistry = new ToolRegistry();
+      toolRegistry.registerMany(nativeTools);
+
+      if (enableVibeServe) {
+        const enabledTools = (process.env.VIBESERVE_ENABLED_TOOLS || "vs_memory_get,vs_memory_store,vs_schema_validate")
+          .split(",")
+          .map(t => t.trim());
+        for (const tool of vibeserveTools) {
+          if (enabledTools.includes(tool.name)) {
+            toolRegistry.register(tool);
+            this.addLog("info", `MCP tool registered: ${tool.name}`);
+          }
+        }
+      }
+
+      // Register VibeServe planning tools if enabled
+      const enableVibeServePlanning = process.env.ENABLE_VIBESERVE_PLANNING === "true";
+      if (enableVibeServePlanning) {
+        for (const tool of vibeservePlanningTools) {
+          toolRegistry.register(tool);
+          this.addLog("info", `MCP Planning tool registered: ${tool.name}`);
+        }
+      }
+
+      const toolContext: ToolContext = {
+        workspaceRoot: process.cwd(),
+        daemon: this
+      };
+
       const toolsConfig = [
         {
-          functionDeclarations: [
-            {
-              name: "read_file",
-              description: "Read the complete contents of a file in the workspace.",
-              parameters: {
-                type: Type.OBJECT,
-                properties: {
-                  filePath: {
-                    type: Type.STRING,
-                    description: "Relative path of the file from the workspace root (e.g., 'src/App.tsx')"
-                  }
-                },
-                required: ["filePath"]
-              }
-            },
-            {
-              name: "create_file",
-              description: "Create a completely new file in the workspace with initial content.",
-              parameters: {
-                type: Type.OBJECT,
-                properties: {
-                  filePath: {
-                    type: Type.STRING,
-                    description: "Relative path of the new file from the workspace root (e.g., 'src/components/MyComponent.tsx')"
-                  },
-                  content: {
-                    type: Type.STRING,
-                    description: "The complete initial content of the file"
-                  }
-                },
-                required: ["filePath", "content"]
-              }
-            },
-            {
-              name: "apply_diff",
-              description: "Apply a precise find-and-replace block to modify a file.",
-              parameters: {
-                type: Type.OBJECT,
-                properties: {
-                  filePath: {
-                    type: Type.STRING,
-                    description: "Relative path of the file from the workspace root"
-                  },
-                  findContent: {
-                    type: Type.STRING,
-                    description: "The exact substring of file content that needs to be replaced"
-                  },
-                  replaceContent: {
-                    type: Type.STRING,
-                    description: "The new content to replace findContent with"
-                  }
-                },
-                required: ["filePath", "findContent", "replaceContent"]
-              }
-            },
-            {
-              name: "run_command",
-              description: "Run a compilation, linting, or diagnostic shell command safely.",
-              parameters: {
-                type: Type.OBJECT,
-                properties: {
-                  command: {
-                    type: Type.STRING,
-                    description: "The command to execute (e.g., 'tsc --noEmit', 'npm run lint', 'npx vitest run')"
-                  }
-                },
-                required: ["command"]
-              }
-            }
-          ]
+          functionDeclarations: toolRegistry.getFunctionDeclarations()
         }
       ];
 
@@ -690,80 +719,10 @@ Strict rules:
         for (const call of functionCalls) {
           const { name, args, id } = call;
           this.addLog("system", `ReAct Loop: System calling "${name}" tool with args: ${JSON.stringify(args)}`);
-          
+
           let result: any = null;
           try {
-            if (name === "read_file") {
-              const relPath = args.filePath as string;
-              const fullPath = path.resolve(process.cwd(), relPath);
-              if (!fullPath.startsWith(process.cwd())) {
-                throw new Error("Access denied: File path escapes workspace.");
-              }
-              if (fs.existsSync(fullPath)) {
-                const code = fs.readFileSync(fullPath, "utf-8");
-                result = { content: code };
-                this.addLog("success", `Tool Outcome: Successfully read "${relPath}" (${code.split("\n").length} lines)`);
-              } else {
-                result = { error: `File not found at: ${relPath}` };
-                this.addLog("warning", `Tool Outcome: File not found at "${relPath}"`);
-              }
-            } else if (name === "create_file") {
-              const relPath = args.filePath as string;
-              const content = args.content as string;
-              const fullPath = path.resolve(process.cwd(), relPath);
-              if (!fullPath.startsWith(process.cwd())) {
-                throw new Error("Access denied: File path escapes workspace.");
-              }
-              const dir = path.dirname(fullPath);
-              if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-              }
-              fs.writeFileSync(fullPath, content, "utf-8");
-              result = { success: true, filePath: relPath };
-              this.addLog("success", `Tool Outcome: Successfully created file "${relPath}"`);
-              this.addMicroChange("/" + relPath, "added", `+${content.split("\n").length} -0`);
-            } else if (name === "apply_diff") {
-              const relPath = args.filePath as string;
-              const findText = args.findContent as string;
-              const replaceText = args.replaceContent as string;
-              const fullPath = path.resolve(process.cwd(), relPath);
-              if (!fullPath.startsWith(process.cwd())) {
-                throw new Error("Access denied: File path escapes workspace.");
-              }
-              if (fs.existsSync(fullPath)) {
-                const code = fs.readFileSync(fullPath, "utf-8");
-                if (code.includes(findText)) {
-                  const updated = code.split(findText).join(replaceText);
-                  fs.writeFileSync(fullPath, updated, "utf-8");
-                  result = { success: true };
-                  this.addLog("success", `Tool Outcome: Successfully edited "${relPath}"`);
-                  this.addMicroChange("/" + relPath, "modified", `+${replaceText.split("\n").length} -${findText.split("\n").length}`);
-                } else {
-                  result = { error: "Target findContent was not found in the file. Ensure the content matches exactly." };
-                  this.addLog("warning", `Tool Outcome: findContent mismatch in "${relPath}"`);
-                }
-              } else {
-                result = { error: `File not found at: ${relPath}` };
-                this.addLog("warning", `Tool Outcome: File not found at "${relPath}"`);
-              }
-            } else if (name === "run_command") {
-              const cmd = args.command as string;
-              const blacklisted = ["rm -rf /", "rm -rf *", "mv", "shutdown", "reboot"];
-              if (blacklisted.some(b => cmd.includes(b))) {
-                result = { error: "Command blocked: Security violation." };
-                this.addLog("error", `Tool Outcome: Command "${cmd}" was blocked for security.`);
-              } else {
-                const { execSync } = await import("child_process");
-                try {
-                  const stdout = execSync(cmd, { encoding: "utf-8", timeout: 30000 });
-                  result = { stdout };
-                  this.addLog("success", `Tool Outcome: Command "${cmd}" executed successfully.`);
-                } catch (cmdErr: any) {
-                  result = { error: cmdErr.message, stdout: cmdErr.stdout, stderr: cmdErr.stderr };
-                  this.addLog("warning", `Tool Outcome: Command "${cmd}" failed with code ${cmdErr.status}`);
-                }
-              }
-            }
+            result = await toolRegistry.execute(name, args ?? {}, toolContext);
           } catch (toolErr: any) {
             result = { error: toolErr.message };
             this.addLog("error", `Tool Error: ${toolErr.message}`);
@@ -788,11 +747,15 @@ Strict rules:
         });
       }
 
-      step.status = "complete";
-      this.currentPhase = "Idle";
-      this.updateWorkspaceMetrics();
-      this.addLog("success", `Step [${stepId}] executed successfully via ReAct Tool Loop.`);
-      this.saveState();
+       step.status = "complete";
+       this.currentPhase = "Idle";
+       this.updateWorkspaceMetrics();
+       this.addLog("success", `Step [${stepId}] executed successfully via ReAct Tool Loop.`);
+       
+       // Audit after step completion
+       this.performAudit().catch(console.error);
+       
+       this.saveState();
     } catch (err: any) {
       step.status = "failed";
       this.currentPhase = "Error";

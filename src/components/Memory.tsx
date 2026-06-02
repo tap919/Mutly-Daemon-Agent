@@ -50,7 +50,7 @@ export default function Memory({
   const [loading, setLoading] = useState(true);
 
   // Phase 4 states
-  const [activeSubTab, setActiveSubTab] = useState<"ast" | "vector font">("vector");
+  const [activeSubTab, setActiveSubTab] = useState<"ast" | "vector">("vector");
   const [vectorQuery, setVectorQuery] = useState("");
   const [vectorResults, setVectorResults] = useState<VectorResult[]>([]);
   const [indexing, setIndexing] = useState(false);
@@ -333,17 +333,17 @@ export default function Memory({
               <Sparkles className="w-3.5 h-3.5" />
               Semantic Embedding Index
             </button>
-            <button
-              onClick={() => setActiveSubTab("ast")}
-              className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
-                activeSubTab === "ast"
-                  ? "bg-indigo-600 text-white font-medium shadow-sm"
-                  : "text-zinc-400 hover:text-zinc-250"
-              }`}
-            >
-              <Code2 className="w-3.5 h-3.5" />
-              Symbolic AST Index
-            </button>
+              <button
+                onClick={() => setActiveSubTab("ast")}
+                className={`px-3 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                  activeSubTab === "ast"
+                    ? "bg-indigo-600 text-white font-medium shadow-sm"
+                    : "text-zinc-400 hover:text-zinc-250"
+                }`}
+              >
+                <Code2 className="w-3.5 h-3.5" />
+                Grep & AST
+              </button>
           </div>
         </div>
 
@@ -462,6 +462,20 @@ export default function Memory({
         {/* Tab content B: Symbolic AST scan */}
         {activeSubTab === "ast" && (
           <div className="border border-zinc-800 rounded-lg bg-zinc-900/10 p-5 space-y-6">
+            {/* AST stats bar — required for test assertion */}
+            <div className="flex items-center gap-4 px-4 py-2 bg-zinc-950/60 border border-zinc-800/80 rounded-lg text-xs font-mono">
+              <div className="flex items-center gap-2">
+                <Code2 className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="text-zinc-500">AST Hits</span>
+                <span className="text-zinc-200 font-semibold">
+                  {symbolsData.reduce((acc, f) => acc + f.symbols.length, 0)} nodes
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-zinc-500">Files</span>
+                <span className="text-zinc-200 font-semibold">{symbolsData.length} modules</span>
+              </div>
+            </div>
             <div className="flex items-center gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-500" />

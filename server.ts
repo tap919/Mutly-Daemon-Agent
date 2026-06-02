@@ -4,9 +4,13 @@ dotenv.config();
 import express from "express";
 import path from "path";
 import fs from "fs";
+import rateLimit from "express-rate-limit";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { agentDaemon, getWorkspaceSymbols } from "./server/agentDaemon.js";
+import { ReporankAuditService } from "./server/audit/reporankAuditService.ts";
+import { WebSocketServer } from "ws";
+import { handleWebSocketConnection } from "./server/ws-server.js";
 
 async function startServer() {
   const app = express();
@@ -14,31 +18,32 @@ async function startServer() {
 
   app.use(express.json());
 
-  // Aligned with Audit Item #8: Secure Custom CORS Middleware
-  app.use((req, res, next) => {
-    const originStr = process.env.ALLOWED_ORIGINS;
-    const allowedOrigins = originStr ? originStr.split(",") : [];
-    const requestOrigin = req.headers.origin;
-    
-    let targetOrigin = "";
-    if (allowedOrigins.length > 0) {
-      if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
-        targetOrigin = requestOrigin;
-      }
-    } else {
-      targetOrigin = requestOrigin || "*";
-    }
-
-    if (targetOrigin) {
-      res.setHeader("Access-Control-Allow-Origin", targetOrigin);
-    }
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "X-Mutly-API-Key, Authorization, Content-Type");
-    if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
-    }
-    next();
-  });
+   // Fixed CORS fallback: closed by default when ALLOWED_ORIGINS unset
+   app.use((req, res, next) => {
+     const originStr = process.env.ALLOWED_ORIGINS;
+     const allowedOrigins = originStr ? originStr.split(",") : [];
+     const requestOrigin = req.headers.origin;
+     
+     let targetOrigin = "";
+     if (allowedOrigins.length > 0) {
+       if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
+         targetOrigin = requestOrigin;
+       }
+     } else {
+       // Changed from requestOrigin || "" to deny by default for security
+       targetOrigin = ""; // Deny all origins when ALLOWED_ORIGINS is not set
+     }
+ 
+     if (targetOrigin) {
+       res.setHeader("Access-Control-Allow-Origin", targetOrigin);
+     }
+     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+     res.setHeader("Access-Control-Allow-Headers", "X-Mutly-API-Key, Authorization, Content-Type");
+     if (req.method === "OPTIONS") {
+       return res.sendStatus(200);
+     }
+     next();
+   });
 
   // Custom secure key retrieval combined with standard environment vars
   const MUTLY_API_KEY = process.env.MUTLY_API_KEY || agentDaemon.getSecureKey();
@@ -49,30 +54,67 @@ async function startServer() {
     return String(e);
   };
 
-  // Helper to parse cookies from headers
-  function getCookieHeader(cookieString: string | undefined, name: string): string | null {
-    if (!cookieString) return null;
-    const match = cookieString.match(new RegExp('(^|; )' + name + '=([^;]*)'));
-    return match ? decodeURIComponent(match[2]) : null;
-  }
+   // Secure all API endpoints
+   app.use((req, res, next) => {
+     console.log(`[Server Request] ${req.method} ${req.originalUrl || req.url}`);
+     next();
+   });
 
-  // Secure all API endpoints
-  app.use((req, res, next) => {
-    console.log(`[Server Request] ${req.method} ${req.originalUrl || req.url}`);
-    next();
-  });
+   // Rate limiting for API endpoints
+   const apiLimiter = rateLimit({
+     windowMs: 15 * 60 * 1000, // 15 minutes
+     max: 100, // limit each IP to 100 requests per windowMs
+     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+     legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+     message: { error: "Too many requests from this IP, please try again later." }
+   });
+   
+   // Apply rate limiting to specific routes
+   app.use("/api/agent/analyze", apiLimiter);
+   app.use("/api/agent/inject-optimization-plan", apiLimiter);
+   app.use("/api/agent/plan", apiLimiter);
+   app.use("/api/agent/dream", apiLimiter);
+   app.use("/api/agent/run-step", apiLimiter);
+   app.use("/api/agent/run-all-steps", apiLimiter);
+   app.use("/api/agent/sandbox/run", apiLimiter);
+   app.use("/api/agent/embeddings/index", apiLimiter);
+   app.use("/api/agent/embeddings/search", apiLimiter);
+   app.use("/api/agent/integrations/session", apiLimiter);
+   app.use("/api/agent/integrations/rpc", apiLimiter);
+   app.use("/api/agent/integrations/compact-sim", apiLimiter);
 
-  function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-    const apiKey = req.headers["x-mutly-api-key"] || req.headers["authorization"]?.toString().replace(/^Bearer\s+/i, "");
-    console.log(`[Auth Check] Client Key Length: ${apiKey ? (apiKey as string).length : 0}, Expected Length: ${MUTLY_API_KEY.length}`);
-    if (apiKey === MUTLY_API_KEY) {
-      return next();
-    }
-    console.warn(`[Auth Check Failed] Key Mismatch or Missing. Sending 401 response.`);
-    return res.status(401).json({ error: "Unauthorized: Invalid or missing X-Mutly-API-Key header." });
-  }
+   function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+     const apiKey = req.headers["x-mutly-api-key"] || req.headers["authorization"]?.toString().replace(/^Bearer\s+/i, "");
+     if (apiKey === MUTLY_API_KEY) {
+       return next();
+     }
+     console.warn(`[Auth Check Failed] Key Mismatch or Missing. Sending 401 response.`);
+     return res.status(401).json({ error: "Unauthorized: Invalid or missing X-Mutly-API-Key header." });
+   }
 
   app.use("/api", authMiddleware);
+
+  // Approval Routes
+  app.get("/api/agent/approvals", (req, res) => {
+    try {
+      const { approvalStore } = require("./server/policy/approvalStore.js");
+      res.json({ success: true, requests: approvalStore.listRequests() });
+    } catch (e: unknown) {
+      res.status(500).json({ error: getErrorMessage(e) });
+    }
+  });
+
+  app.post("/api/agent/approvals/:id/resolve", async (req, res) => {
+    const { id } = req.params;
+    const { decision } = req.body;
+    try {
+      const { approvalStore } = require("./server/policy/approvalStore.js");
+      await approvalStore.resolveRequest(id, decision);
+      res.json({ success: true });
+    } catch (e: unknown) {
+      res.status(500).json({ error: getErrorMessage(e) });
+    }
+  });
 
   // API Routes
   app.get("/api/agent/status", (req, res) => {
@@ -391,211 +433,62 @@ Try prompting me with a refactor question:
     }
   });
 
-  // Code Audit Database definition
-  const auditDatabase = [
-    {
-      id: 1,
-      severity: "critical",
-      title: "ws.ip is undefined — use req.socket.remoteAddress",
-      explanation: "WebSocket instances from the NPM 'ws' library do not expose a direct .ip property. Referencing ws.ip yields 'undefined' on every client connection event log.",
-      vulnerable: `console.log('[WS] Client connected. ', ws.ip);\nconsole.log('[WS] Client disconnected.', ws.ip);`,
-      remediation: `// Capture client IP from the connection request block instead\nconst clientIp = req.socket.remoteAddress ?? 'unknown';\nconsole.log('[WS] Client connected. ', clientIp);`
-    },
-    {
-      id: 2,
-      severity: "critical",
-      title: "Unhandled native Promise Rejection on mcp_call",
-      explanation: "Inside the mcp_call channel case, orchestrator.callMcpTool is called asynchronously but lacks a .catch() rider. Under Node 18+, any uncaught promise rejection crashes the daemon container instantly.",
-      vulnerable: `orchestrator.callMcpTool(tool, args).then((res) => {\n  ws.send(JSON.stringify({ type: 'mcp_result', tool, result: res }));\n});`,
-      remediation: `orchestrator.callMcpTool(tool, args)\n  .then((res) => {\n    ws.send(JSON.stringify({ type: 'mcp_result', tool, result: res }));\n  })\n  .catch((err) => {\n    console.error('[WS] Tool call failed:', err);\n    ws.send(JSON.stringify({ type: 'error', tool, message: err.message }));\n  });`
-    },
-    {
-      id: 3,
-      severity: "critical",
-      title: "Pipeline instantiated but never executed (run_pipeline)",
-      explanation: "In the run_pipeline message handler, the Orchestrator is instanced, status is set to 'running', and pipeline_start is broadcasted—but call orchestrator.run() or equivalent is completely omitted, stalling the client forever.",
-      vulnerable: `const orchestrator = new Orchestrator(sessionSb, ws);\npipelineState.set(sessionSb, { status: 'running', spec, steps: [] });\norchestrator.broadcastToSandbox({ type: 'pipeline_start', sandboxId: sessionSb });`,
-      remediation: `const orchestrator = new Orchestrator(sessionSb, ws);\npipelineState.set(sessionSb, { status: 'running', spec, steps: [] });\norchestrator.broadcastToSandbox({ type: 'pipeline_start', sandboxId: sessionSb });\n\n// Trigger async execution stream of steps\norchestrator.run(spec)\n  .then(() => {\n    pipelineState.set(sessionSb, { status: 'completed', spec });\n  })\n  .catch((err) => {\n    pipelineState.set(sessionSb, { status: 'failed', spec, error: err.message });\n  });`
-    },
-    {
-      id: 4,
-      severity: "leak",
-      title: "pipelineState Map handles never deleted growing cache",
-      explanation: "Entries are appended via Map.set() on run_pipeline trigger but are never deleted or timed out, representing an unbound lookup map growth leak.",
-      vulnerable: `pipelineState.set(sessionSb, { status: 'running', spec, steps: [] });`,
-      remediation: `// Clean up execution states on WebSocket teardown\nws.on('close', () => {\n  pipelineState.delete(sessionSb);\n});`
-    },
-    {
-      id: 5,
-      severity: "leak",
-      title: "Empty WebSocket Sets accumulate in clients map",
-      explanation: "During ws close handlers, client connections are deleted from Sandbox connection set groups, but dead empty Set containers are never unregistered from the main clients map.",
-      vulnerable: `ws.on('close', () => {\n  if (sandboxId) clients.get(sandboxId)?.delete(ws);\n});`,
-      remediation: `ws.on('close', () => {\n  if (sandboxId) {\n    const set = clients.get(sandboxId);\n    if (set) {\n      set.delete(ws);\n      if (set.size === 0) {\n        clients.delete(sandboxId);\n      }\n    }\n  }\n});`
-    },
-    {
-      id: 6,
-      severity: "leak",
-      title: "Orchestrator holds solid ws reference preventing GC",
-      explanation: "Orchestrator class binds the open WebSocket to this.ws. If intermediate API cycles or future LLM requests stall, closure holds prevent Garbage Collection even after sockets terminate.",
-      vulnerable: `class Orchestrator {\n  constructor(sandboxId, ws) {\n    this.ws = ws;\n  }\n}`,
-      remediation: `class Orchestrator {\n  constructor(sandboxId, ws) {\n    this.wsRef = new WeakRef(ws);\n  }\n  send(msg) {\n    const ws = this.wsRef.deref();\n    if (ws && ws.readyState === 1) { // OPEN\n      ws.send(JSON.stringify(msg));\n    }\n  }\n}`
-    },
-    {
-      id: 7,
-      severity: "security",
-      title: "Authentication secret token exposed in query parameters",
-      explanation: "Extracting tokens from search parameters like ?token= can result in API secret disclosure in proxy access logs and system logs.",
-      vulnerable: `const token = url.searchParams.get('token') || req.headers['x-api-key'];`,
-      remediation: `// Strictly query from HTTP headers and avoid logs footprint\nconst token = req.headers['x-api-key'] || req.headers['authorization']?.split(' ')[1];`
-    },
-    {
-      id: 8,
-      severity: "security",
-      title: "Wildcard CORS headers config permits CSRF hijack",
-      explanation: "Enabling global wildcard Access-Control-Allow-Origin: * lets third-party browser scripts query administrative files on localhost.",
-      vulnerable: `app.use(cors());`,
-      remediation: `const originStr = process.env.ALLOWED_ORIGINS;\napp.use(cors({\n  origin: originStr ? originStr.split(',') : false\n}));`
-    },
-    {
-      id: 9,
-      severity: "security",
-      title: "Review gate returns static deployClearance default",
-      explanation: "The review endpoint generates passed assertions unconditionally. Failures or critical security warnings in the build results are bypassed.",
-      vulnerable: `ws.send(JSON.stringify({\n  type: 'codenexus_result',\n  status: 'passed',\n  deployClearance: true\n}));`,
-      remediation: `ws.send(JSON.stringify({\n  type: 'codenexus_result',\n  status: buildResult.success ? 'passed' : 'failed',\n  deployClearance: buildResult.success && testCoverage > 80\n}));`
-    },
-    {
-      id: 10,
-      severity: "logic",
-      title: "Premature run_pipeline generates orphaned lost session IDs",
-      explanation: "Evaluating runs before initiating sandbox states triggers fallback UUID registrations that are completely unreachable by clients later.",
-      vulnerable: `const sessionSb = sid || sandboxId || uuidv4();`,
-      remediation: `if (!sandboxId && !sid) {\n  throw new Error('Sandbox session must be registered before pipeline execution.');\n}`
-    },
-    {
-      id: 11,
-      severity: "logic",
-      title: "Package manager detection defaults to stub 'npm'",
-      explanation: "Bypasses Yarn or PNPM files, triggering npm actions on custom environments which results in dependency conflicts.",
-      vulnerable: `detectPackageManager(dir: string) {\n  return { manager: 'npm', dir };\n}`,
-      remediation: `detectPackageManager(dir: string) {\n  if (fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))) {\n    return { manager: 'pnpm', dir };\n  }\n  if (fs.existsSync(path.join(dir, 'yarn.lock'))) {\n    return { manager: 'yarn', dir };\n  }\n  return { manager: 'npm', dir };\n}`
-    },
-    {
-      id: 12,
-      severity: "logic",
-      title: "Filesystem I/O WriteFile & ReadFile remain unmapped stubs",
-      explanation: "The write/read handlers do not write/read blocks on directories, breaking verify loops that check if files exist.",
-      vulnerable: `writeFile(args: any) {\n  return { path: args.path, written: true };\n}`,
-      remediation: `writeFile(args: any) {\n  const fullPath = path.resolve(this.workspaceDir, args.path);\n  fs.writeFileSync(fullPath, args.content, 'utf-8');\n  return { path: args.path, written: true };\n}`
-    },
-    {
-      id: 13,
-      severity: "smell",
-      title: "Pervasive 'any' parameter types eliminate compiler TS safety",
-      explanation: "Widespread use of 'any' bypasses standard types and permits silent syntax compilation errors.",
-      vulnerable: `pipelineState: Map<string, any>;\ncallMcpTool(toolName: string, args: any)`,
-      remediation: `interface PipelineStep { id: string; status: string; }\ninterface PipelinePayload { status: string; spec: string; steps: PipelineStep[]; }`
-    },
-    {
-      id: 14,
-      severity: "smell",
-      title: "MCP_PORT constant defined but never bound",
-      explanation: "Unreferenced declarations clutter startup configurations and mislead developers.",
-      vulnerable: `const MCP_PORT = process.env.VIBESERVE_MCP_PORT ? parseInt(...) : 4300;`,
-      remediation: `// Remove dead configurations or connect stdio stream hooks properly.`
-    },
-    {
-      id: 15,
-      severity: "smell",
-      title: "20+ debugging and script artifacts clutter workspace root",
-      explanation: "Testing files like check-tabs, test-blank clutter the root index, making it difficult to find main files.",
-      vulnerable: `/check-tabs.ts, /debug-settings.ts, /test-blank-screen.js`,
-      remediation: `// Move files under tests/ or purge obsolete log trackers.`
-    },
-    {
-      id: 16,
-      severity: "smell",
-      title: "Orchestrator reinstantiated per WebSocket message",
-      explanation: "Creates new class handlers on every message, causing variables to reset continuously.",
-      vulnerable: `case 'mcp_call': {\n  const orchestrator = new Orchestrator(sandboxId, ws);`,
-      remediation: `let orchestrator = orchestrators.get(sandboxId);\nif (!orchestrator) {\n  orchestrator = new Orchestrator(sandboxId, ws);\n  orchestrators.set(sandboxId, orchestrator);\n}`
-    }
-  ];
+   // Initialize Reporank audit service
+   const reporankAuditService = new ReporankAuditService();
 
-  app.get("/api/agent/audit", (req, res) => {
-    const wsServerPath = path.resolve(process.cwd(), "server/ws-server.ts");
-    const serverPath = path.resolve(process.cwd(), "server.ts");
-    
-    let wsServerContent = "";
-    if (fs.existsSync(wsServerPath)) {
-      wsServerContent = fs.readFileSync(wsServerPath, "utf-8");
-    }
-    
-    let serverContent = "";
-    if (fs.existsSync(serverPath)) {
-      serverContent = fs.readFileSync(serverPath, "utf-8");
-    }
+   app.get("/api/agent/audit", async (req, res) => {
+     try {
+       const auditReport = await reporankAuditService.auditWorkspace();
+       // Optionally display the report in console for debugging
+       // reporankAuditService.displayReport(auditReport, "mutly-daemon-agent");
+       
+       // Convert audit report to the expected format for frontend compatibility
+       // We'll create a simplified version that maintains the expected structure
+       const auditResults = [
+         {
+           id: 1,
+           severity: auditReport.score >= 80 ? "info" : auditReport.score >= 60 ? "warning" : "critical",
+           title: `Code Quality Score: ${auditReport.score}/100`,
+           explanation: `Reporank audit completed. Found ${auditReport.files} files analyzed.`,
+           vulnerable: `Audit score: ${auditReport.score}/100`,
+           remediation: auditReport.vibe.recommendations.join("; "),
+           status: auditReport.score >= 80 ? "passed" : auditReport.score >= 60 ? "warning" : "failed",
+           filesAudited: auditReport.files,
+           secretsFound: auditReport.secrets.secretsFound,
+           recommendations: auditReport.vibe.recommendations
+         }
+       ];
+       
+       res.json({ success: true, issues: auditResults });
+     } catch (error) {
+       console.error(`Audit failed: ${error.message}`);
+       res.status(500).json({ 
+         success: false, 
+         error: `Audit failed: ${error.message}` 
+       });
+     }
+   });
 
-    const issuesWithStatus = auditDatabase.map(issue => {
-      let isApplied = false;
-      const isWsIssue = issue.vulnerable.includes("ws") || issue.vulnerable.includes("pipeline") || issue.vulnerable.includes("Orchestrator");
-      if (isWsIssue) {
-        isApplied = wsServerContent.includes(issue.vulnerable);
-      } else {
-        isApplied = serverContent.includes(issue.vulnerable);
-      }
-      return {
-        ...issue,
-        status: isApplied ? "detected" : "resolved"
-      };
-    });
-
-    res.json({ success: true, issues: issuesWithStatus });
-  });
-
-  app.post("/api/agent/audit/fix-sim", (req, res) => {
-    const { id } = req.body;
-    const issue = auditDatabase.find(i => i.id === id);
-    if (!issue) {
-       return res.status(444).json({ error: "No matching issue" });
-    }
-
-    const wsServerPath = path.resolve(process.cwd(), "server/ws-server.ts");
-    const serverPath = path.resolve(process.cwd(), "server.ts");
-    const isWsIssue = issue.vulnerable.includes("ws") || issue.vulnerable.includes("pipeline") || issue.vulnerable.includes("Orchestrator");
-    const targetPath = isWsIssue ? wsServerPath : serverPath;
-
-    let appliedReal = false;
-
-    if (fs.existsSync(targetPath)) {
-      const content = fs.readFileSync(targetPath, "utf-8");
-      if (content.includes(issue.vulnerable)) {
-        const updated = content.split(issue.vulnerable).join(issue.remediation);
-        fs.writeFileSync(targetPath, updated, "utf-8");
-        appliedReal = true;
-        agentDaemon.addLog("success", `Auditor Daemon: Resolved Issue #${id} dynamically in "${path.basename(targetPath)}"`);
-        agentDaemon.addMicroChange("/" + path.relative(process.cwd(), targetPath), "modified", `~fixed audit vuln #${id}`);
-      }
-    }
-
-    res.json({
-       success: true,
-       isSimulation: !appliedReal,
-       issueId: id,
-       logs: appliedReal ? [
-          `[AUDIT DAEMON KEY-LOCK EXECUTOR] Initializing dynamic patch execution for issue #${id}...`,
-          `[AUDIT DAEMON KEY-LOCK EXECUTOR] Targeting active code resource file: "${path.basename(targetPath)}"...`,
-          `[AUDIT DAEMON KEY-LOCK EXECUTOR] Target vulnerability block verified and matched in active ast buffers.`,
-          `[AUDIT DAEMON KEY-LOCK EXECUTOR] Swapping with secure remediation snippet.`,
-          `[AUDIT DAEMON KEY-LOCK EXECUTOR] Content write committed to disk successfully. Running checksums...`,
-          `[AUDIT DAEMON KEY-LOCK EXECUTOR] Verification succeeded: Build status is secure. Marked as RESOLVED.`
-       ] : [
-          `[AUDIT DAEMON DRY-RUN] Pre-execution check: File segment matches secure spec or already resolved.`,
-          `[AUDIT DAEMON DRY-RUN] Verification passed: Remediation complete.`
-       ]
-    });
-  });
+   app.post("/api/agent/audit/fix-sim", async (req, res) => {
+     // For the fix-sim endpoint, we'll run a fresh audit and return the results
+     // since reporank provides actionable recommendations rather than specific fixes to apply
+     try {
+       const auditReport = await reporankAuditService.auditWorkspace();
+       
+       res.json({
+         success: true,
+         isSimulation: false,
+         auditReport: auditReport,
+         message: "Fresh audit completed with reporank. Check recommendations for actionable items."
+       });
+     } catch (error) {
+       console.error(`Audit fix-sim failed: ${error.message}`);
+       res.status(500).json({ 
+         success: false, 
+         error: `Audit failed: ${error.message}` 
+       });
+     }
+   });
 
   app.post("/api/agent/sandbox/run", async (req, res) => {
     const { command } = req.body;
@@ -645,9 +538,13 @@ Try prompting me with a refactor question:
     });
   }
 
-  const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+   const server = app.listen(PORT, "0.0.0.0", () => {
+     console.log(`Server running on http://localhost:${PORT}`);
+   });
+
+   // Mount WebSocket server
+   const wss = new WebSocketServer({ server });
+   wss.on('connection', handleWebSocketConnection);
 
   // Graceful shutdown
   const shutdown = () => {
