@@ -19,7 +19,7 @@ export function scanWorkspace(dir: string) {
     if (!fs.existsSync(currentDir)) return;
     const files = fs.readdirSync(currentDir);
     for (const file of files) {
-      if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "dist-server") {
+      if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "embeddings.json" || file === "dist-server") {
         continue;
       }
       const fullPath = path.join(currentDir, file);
@@ -220,11 +220,31 @@ export class AgentDaemon {
         if (stored.currentPhase) this.currentPhase = stored.state?.currentPhase || stored.currentPhase;
         if (stored.state) this.state = stored.state;
         if (stored.secureKey) this.secureKey = stored.secureKey;
-        if (stored.fileEmbeddings) this.fileEmbeddings = stored.fileEmbeddings;
         if (stored.sandboxLogs) this.sandboxLogs = stored.sandboxLogs;
+      }
+
+      const embeddingsPath = path.resolve(process.cwd(), "embeddings.json");
+      if (fs.existsSync(embeddingsPath)) {
+        try {
+          const storedEmbed = JSON.parse(fs.readFileSync(embeddingsPath, "utf-8"));
+          if (Array.isArray(storedEmbed)) {
+            this.fileEmbeddings = storedEmbed;
+          }
+        } catch (e) {
+          console.error("Failed to load embeddings.json:", e);
+        }
       }
     } catch (e) {
       console.error("Failed to load db.json, falling back:", e);
+    }
+  }
+
+  public saveEmbeddings() {
+    try {
+      const embeddingsPath = path.resolve(process.cwd(), "embeddings.json");
+      fs.writeFileSync(embeddingsPath, JSON.stringify(this.fileEmbeddings, null, 2), "utf-8");
+    } catch (e) {
+      console.error("Failed to save embeddings to embeddings.json:", e);
     }
   }
 
@@ -237,7 +257,6 @@ export class AgentDaemon {
         currentPhase: this.currentPhase,
         state: this.state,
         secureKey: this.secureKey,
-        fileEmbeddings: this.fileEmbeddings,
         sandboxLogs: this.sandboxLogs
       };
       fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), "utf-8");
@@ -556,9 +575,10 @@ ${this.claude}
             {
               text: `You are Mutly, an elite ReAct agent. Your goal is to execute the following step: "${step.step}".
               
-You have access to files in the repository. Use the tools to read files, edit content, and compile/lint results of your edits to verify.
+You have access to files in the repository. Use the tools to read files, write files, edit content, and compile/lint results of your edits to verify.
 Available tools:
 - read_file: to inspect a file's code.
+- create_file: to create a completely new file with content.
 - apply_diff: to make precise find-and-replace changes.
 - run_command: to execute linting, typescript checking, or unit tests (e.g. 'tsc --noEmit', 'npm run lint', or vitest commands).
 
@@ -587,6 +607,24 @@ Strict rules:
                   }
                 },
                 required: ["filePath"]
+              }
+            },
+            {
+              name: "create_file",
+              description: "Create a completely new file in the workspace with initial content.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  filePath: {
+                    type: Type.STRING,
+                    description: "Relative path of the new file from the workspace root (e.g., 'src/components/MyComponent.tsx')"
+                  },
+                  content: {
+                    type: Type.STRING,
+                    description: "The complete initial content of the file"
+                  }
+                },
+                required: ["filePath", "content"]
               }
             },
             {
@@ -638,7 +676,7 @@ Strict rules:
         this.addLog("info", `ReAct Turn ${loopCount}: Querying LLM...`);
         
         const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
+          model: "gemini-2.5-flash",
           contents: messages,
           config: {
             tools: toolsConfig,
@@ -678,6 +716,21 @@ Strict rules:
                 result = { error: `File not found at: ${relPath}` };
                 this.addLog("warning", `Tool Outcome: File not found at "${relPath}"`);
               }
+            } else if (name === "create_file") {
+              const relPath = args.filePath as string;
+              const content = args.content as string;
+              const fullPath = path.resolve(process.cwd(), relPath);
+              if (!fullPath.startsWith(process.cwd())) {
+                throw new Error("Access denied: File path escapes workspace.");
+              }
+              const dir = path.dirname(fullPath);
+              if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+              }
+              fs.writeFileSync(fullPath, content, "utf-8");
+              result = { success: true, filePath: relPath };
+              this.addLog("success", `Tool Outcome: Successfully created file "${relPath}"`);
+              this.addMicroChange("/" + relPath, "added", `+${content.split("\n").length} -0`);
             } else if (name === "apply_diff") {
               const relPath = args.filePath as string;
               const findText = args.findContent as string;
@@ -689,7 +742,7 @@ Strict rules:
               if (fs.existsSync(fullPath)) {
                 const code = fs.readFileSync(fullPath, "utf-8");
                 if (code.includes(findText)) {
-                  const updated = code.replace(findText, replaceText);
+                  const updated = code.split(findText).join(replaceText);
                   fs.writeFileSync(fullPath, updated, "utf-8");
                   result = { success: true };
                   this.addLog("success", `Tool Outcome: Successfully edited "${relPath}"`);
@@ -775,7 +828,7 @@ Strict rules:
         if (!fs.existsSync(currentDir)) return;
         const files = fs.readdirSync(currentDir);
         for (const file of files) {
-          if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "dist-server" || file === "mutly-sandbox" || file === "dist-sandbox") {
+          if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "embeddings.json" || file === "dist-server" || file === "mutly-sandbox" || file === "dist-sandbox") {
             continue;
           }
           const fullPath = path.join(currentDir, file);
@@ -852,6 +905,7 @@ Strict rules:
       }
       
       this.fileEmbeddings = newEmbeddings;
+      this.saveEmbeddings();
       
       let totalChunks = 0;
       for (const m of this.fileEmbeddings) {
@@ -1096,7 +1150,7 @@ export function getWorkspaceSymbols() {
     if (!fs.existsSync(currentDir)) return;
     const files = fs.readdirSync(currentDir);
     for (const file of files) {
-      if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "dist-server") {
+      if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "embeddings.json" || file === "dist-server") {
         continue;
       }
       const fullPath = path.join(currentDir, file);
