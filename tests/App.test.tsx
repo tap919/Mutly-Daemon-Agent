@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from '../src/App';
 import LandingPage from '../src/components/LandingPage';
-import { AgentDaemon } from '../server/agentDaemon';
+import { AgentDaemon, scanWorkspace } from '../server/agentDaemon';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock fetch for integration tests
@@ -210,5 +210,24 @@ describe('Backend AgentDaemon Logic Tests', () => {
     expect(injected.tree[0].step).toBe("Prune active websocket sync");
     expect(injected.tree[0].risk).toBe("Medium");
     expect(injected.tree[0].status).toBe("pending");
+  });
+
+  it('correctly executes scanWorkspace to scan current physical directories and count real files', () => {
+    const stats = scanWorkspace(process.cwd());
+    expect(stats.filesCount).toBeGreaterThan(0);
+    expect(stats.linesOfCode).toBeGreaterThan(0);
+    expect(typeof stats.errorCount).toBe('number');
+  });
+
+  it('calculates complex overloads and compaction metrics based on actual scanWorkspace values', async () => {
+    const daemon = new AgentDaemon();
+    
+    const analysis = await daemon.analyzeRepository('local', {});
+    expect(analysis.fileCount).toBeGreaterThan(0);
+    expect(analysis.loc).toBeGreaterThan(0);
+    expect(analysis.complexityIndex).toBeGreaterThanOrEqual(10);
+    expect(analysis.overloadRatio).toBeGreaterThanOrEqual(1);
+    expect(analysis.tokenSavingsPotential).toBeGreaterThanOrEqual(20);
+    expect(analysis.tree.length).toBeGreaterThan(0);
   });
 });

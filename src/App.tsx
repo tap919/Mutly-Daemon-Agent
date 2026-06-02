@@ -13,6 +13,7 @@ import {
   Shield,
   Layers,
   UploadCloud,
+  Cpu,
 } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import UltraPlan from "./components/UltraPlan";
@@ -22,6 +23,7 @@ import AutoDream from "./components/AutoDream";
 import Memory from "./components/Memory";
 import Sandbox from "./components/Sandbox";
 import Injector from "./components/Injector";
+import IdeIntegrations from "./components/IdeIntegrations";
 import LandingPage from "./components/LandingPage";
 import SourceImport from "./components/SourceImport";
 import type { FullState } from "./types";
@@ -130,6 +132,12 @@ export default function App() {
               active={activeTab === "injector"}
               onClick={() => setActiveTab("injector")}
             />
+            <NavItem
+              icon={<Cpu className="w-4 h-4" />}
+              label="IDE Integrations"
+              active={activeTab === "integrations"}
+              onClick={() => setActiveTab("integrations")}
+            />
           </nav>
         </div>
 
@@ -202,6 +210,7 @@ export default function App() {
           {activeTab === "autodream" && <AutoDream agentState={agentState} />}
           {activeTab === "sandbox" && <Sandbox agentState={agentState} />}
           {activeTab === "injector" && <Injector agentState={agentState} />}
+          {activeTab === "integrations" && <IdeIntegrations agentState={agentState} />}
         </div>
       </main>
     </div>

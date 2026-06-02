@@ -52,10 +52,23 @@ export interface MicroChange {
   lines: string;
 }
 
+export interface RepositoryAnalysis {
+  type: "local" | "github";
+  name: string;
+  fileCount: number;
+  loc: number;
+  complexityIndex: number;
+  overloadRatio: number;
+  tokenSavingsPotential: number;
+  message: string;
+  tree: { id: string; step: string; risk: "Low" | "Medium" | "High"; status: "pending" | "active" | "complete" }[];
+  timestamp: number;
+}
+
 export interface FullState {
   status: AgentStatus;
   logs: LogEntry[];
   microChanges: MicroChange[];
   currentPlan: ExecutionPlan | null;
-  lastAnalysis?: any;
+  lastAnalysis?: RepositoryAnalysis | null;
 }
