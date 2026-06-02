@@ -14,6 +14,7 @@ import {
   Layers,
   UploadCloud,
   Cpu,
+  ShieldAlert,
 } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import UltraPlan from "./components/UltraPlan";
@@ -24,6 +25,7 @@ import Memory from "./components/Memory";
 import Sandbox from "./components/Sandbox";
 import Injector from "./components/Injector";
 import IdeIntegrations from "./components/IdeIntegrations";
+import CodeAuditor from "./components/CodeAuditor";
 import LandingPage from "./components/LandingPage";
 import SourceImport from "./components/SourceImport";
 import type { FullState } from "./types";
@@ -138,6 +140,12 @@ export default function App() {
               active={activeTab === "integrations"}
               onClick={() => setActiveTab("integrations")}
             />
+            <NavItem
+              icon={<ShieldAlert className="w-4 h-4" />}
+              label="Code Nexus Audit"
+              active={activeTab === "auditor"}
+              onClick={() => setActiveTab("auditor")}
+            />
           </nav>
         </div>
 
@@ -211,6 +219,7 @@ export default function App() {
           {activeTab === "sandbox" && <Sandbox agentState={agentState} />}
           {activeTab === "injector" && <Injector agentState={agentState} />}
           {activeTab === "integrations" && <IdeIntegrations agentState={agentState} />}
+          {activeTab === "auditor" && <CodeAuditor agentState={agentState} />}
         </div>
       </main>
     </div>

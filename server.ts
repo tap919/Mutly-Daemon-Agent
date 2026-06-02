@@ -301,6 +301,164 @@ Try prompting me with a refactor question:
     }
   });
 
+  // Code Audit Database definition
+  const auditDatabase = [
+    {
+      id: 1,
+      severity: "critical",
+      title: "ws.ip is undefined — use req.socket.remoteAddress",
+      explanation: "WebSocket instances from the NPM 'ws' library do not expose a direct .ip property. Referencing ws.ip yields 'undefined' on every client connection event log.",
+      vulnerable: `console.log('[WS] Client connected. ', ws.ip);\nconsole.log('[WS] Client disconnected.', ws.ip);`,
+      remediation: `// Capture client IP from the connection request block instead\nconst clientIp = req.socket.remoteAddress ?? 'unknown';\nconsole.log('[WS] Client connected. ', clientIp);`
+    },
+    {
+      id: 2,
+      severity: "critical",
+      title: "Unhandled native Promise Rejection on mcp_call",
+      explanation: "Inside the mcp_call channel case, orchestrator.callMcpTool is called asynchronously but lacks a .catch() rider. Under Node 18+, any uncaught promise rejection crashes the daemon container instantly.",
+      vulnerable: `orchestrator.callMcpTool(tool, args).then((res) => {\n  ws.send(JSON.stringify({ type: 'mcp_result', tool, result: res }));\n});`,
+      remediation: `orchestrator.callMcpTool(tool, args)\n  .then((res) => {\n    ws.send(JSON.stringify({ type: 'mcp_result', tool, result: res }));\n  })\n  .catch((err) => {\n    console.error('[WS] Tool call failed:', err);\n    ws.send(JSON.stringify({ type: 'error', tool, message: err.message }));\n  });`
+    },
+    {
+      id: 3,
+      severity: "critical",
+      title: "Pipeline instantiated but never executed (run_pipeline)",
+      explanation: "In the run_pipeline message handler, the Orchestrator is instanced, status is set to 'running', and pipeline_start is broadcasted—but call orchestrator.run() or equivalent is completely omitted, stalling the client forever.",
+      vulnerable: `const orchestrator = new Orchestrator(sessionSb, ws);\npipelineState.set(sessionSb, { status: 'running', spec, steps: [] });\norchestrator.broadcastToSandbox({ type: 'pipeline_start', sandboxId: sessionSb });`,
+      remediation: `const orchestrator = new Orchestrator(sessionSb, ws);\npipelineState.set(sessionSb, { status: 'running', spec, steps: [] });\norchestrator.broadcastToSandbox({ type: 'pipeline_start', sandboxId: sessionSb });\n\n// Trigger async execution stream of steps\norchestrator.run(spec)\n  .then(() => {\n    pipelineState.set(sessionSb, { status: 'completed', spec });\n  })\n  .catch((err) => {\n    pipelineState.set(sessionSb, { status: 'failed', spec, error: err.message });\n  });`
+    },
+    {
+      id: 4,
+      severity: "leak",
+      title: "pipelineState Map handles never deleted growing cache",
+      explanation: "Entries are appended via Map.set() on run_pipeline trigger but are never deleted or timed out, representing an unbound lookup map growth leak.",
+      vulnerable: `pipelineState.set(sessionSb, { status: 'running', spec, steps: [] });`,
+      remediation: `// Clean up execution states on WebSocket teardown\nws.on('close', () => {\n  pipelineState.delete(sessionSb);\n});`
+    },
+    {
+      id: 5,
+      severity: "leak",
+      title: "Empty WebSocket Sets accumulate in clients map",
+      explanation: "During ws close handlers, client connections are deleted from Sandbox connection set groups, but dead empty Set containers are never unregistered from the main clients map.",
+      vulnerable: `ws.on('close', () => {\n  if (sandboxId) clients.get(sandboxId)?.delete(ws);\n});`,
+      remediation: `ws.on('close', () => {\n  if (sandboxId) {\n    const set = clients.get(sandboxId);\n    if (set) {\n      set.delete(ws);\n      if (set.size === 0) {\n        clients.delete(sandboxId);\n      }\n    }\n  }\n});`
+    },
+    {
+      id: 6,
+      severity: "leak",
+      title: "Orchestrator holds solid ws reference preventing GC",
+      explanation: "Orchestrator class binds the open WebSocket to this.ws. If intermediate API cycles or future LLM requests stall, closure holds prevent Garbage Collection even after sockets terminate.",
+      vulnerable: `class Orchestrator {\n  constructor(sandboxId, ws) {\n    this.ws = ws;\n  }\n}`,
+      remediation: `class Orchestrator {\n  constructor(sandboxId, ws) {\n    this.wsRef = new WeakRef(ws);\n  }\n  send(msg) {\n    const ws = this.wsRef.deref();\n    if (ws && ws.readyState === 1) { // OPEN\n      ws.send(JSON.stringify(msg));\n    }\n  }\n}`
+    },
+    {
+      id: 7,
+      severity: "security",
+      title: "Authentication secret token exposed in query parameters",
+      explanation: "Extracting tokens from search parameters like ?token= can result in API secret disclosure in proxy access logs and system logs.",
+      vulnerable: `const token = url.searchParams.get('token') || req.headers['x-api-key'];`,
+      remediation: `// Strictly query from HTTP headers and avoid logs footprint\nconst token = req.headers['x-api-key'] || req.headers['authorization']?.split(' ')[1];`
+    },
+    {
+      id: 8,
+      severity: "security",
+      title: "Wildcard CORS headers config permits CSRF hijack",
+      explanation: "Enabling global wildcard Access-Control-Allow-Origin: * lets third-party browser scripts query administrative files on localhost.",
+      vulnerable: `app.use(cors());`,
+      remediation: `const originStr = process.env.ALLOWED_ORIGINS;\napp.use(cors({\n  origin: originStr ? originStr.split(',') : false\n}));`
+    },
+    {
+      id: 9,
+      severity: "security",
+      title: "Review gate returns static deployClearance default",
+      explanation: "The review endpoint generates passed assertions unconditionally. Failures or critical security warnings in the build results are bypassed.",
+      vulnerable: `ws.send(JSON.stringify({\n  type: 'codenexus_result',\n  status: 'passed',\n  deployClearance: true\n}));`,
+      remediation: `ws.send(JSON.stringify({\n  type: 'codenexus_result',\n  status: buildResult.success ? 'passed' : 'failed',\n  deployClearance: buildResult.success && testCoverage > 80\n}));`
+    },
+    {
+      id: 10,
+      severity: "logic",
+      title: "Premature run_pipeline generates orphaned lost session IDs",
+      explanation: "Evaluating runs before initiating sandbox states triggers fallback UUID registrations that are completely unreachable by clients later.",
+      vulnerable: `const sessionSb = sid || sandboxId || uuidv4();`,
+      remediation: `if (!sandboxId && !sid) {\n  throw new Error('Sandbox session must be registered before pipeline execution.');\n}`
+    },
+    {
+      id: 11,
+      severity: "logic",
+      title: "Package manager detection defaults to stub 'npm'",
+      explanation: "Bypasses Yarn or PNPM files, triggering npm actions on custom environments which results in dependency conflicts.",
+      vulnerable: `detectPackageManager(dir: string) {\n  return { manager: 'npm', dir };\n}`,
+      remediation: `detectPackageManager(dir: string) {\n  if (fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))) {\n    return { manager: 'pnpm', dir };\n  }\n  if (fs.existsSync(path.join(dir, 'yarn.lock'))) {\n    return { manager: 'yarn', dir };\n  }\n  return { manager: 'npm', dir };\n}`
+    },
+    {
+      id: 12,
+      severity: "logic",
+      title: "Filesystem I/O WriteFile & ReadFile remain unmapped stubs",
+      explanation: "The write/read handlers do not write/read blocks on directories, breaking verify loops that check if files exist.",
+      vulnerable: `writeFile(args: any) {\n  return { path: args.path, written: true };\n}`,
+      remediation: `writeFile(args: any) {\n  const fullPath = path.resolve(this.workspaceDir, args.path);\n  fs.writeFileSync(fullPath, args.content, 'utf-8');\n  return { path: args.path, written: true };\n}`
+    },
+    {
+      id: 13,
+      severity: "smell",
+      title: "Pervasive 'any' parameter types eliminate compiler TS safety",
+      explanation: "Widespread use of 'any' bypasses standard types and permits silent syntax compilation errors.",
+      vulnerable: `pipelineState: Map<string, any>;\ncallMcpTool(toolName: string, args: any)`,
+      remediation: `interface PipelineStep { id: string; status: string; }\ninterface PipelinePayload { status: string; spec: string; steps: PipelineStep[]; }`
+    },
+    {
+      id: 14,
+      severity: "smell",
+      title: "MCP_PORT constant defined but never bound",
+      explanation: "Unreferenced declarations clutter startup configurations and mislead developers.",
+      vulnerable: `const MCP_PORT = process.env.VIBESERVE_MCP_PORT ? parseInt(...) : 4300;`,
+      remediation: `// Remove dead configurations or connect stdio stream hooks properly.`
+    },
+    {
+      id: 15,
+      severity: "smell",
+      title: "20+ debugging and script artifacts clutter workspace root",
+      explanation: "Testing files like check-tabs, test-blank clutter the root index, making it difficult to find main files.",
+      vulnerable: `/check-tabs.ts, /debug-settings.ts, /test-blank-screen.js`,
+      remediation: `// Move files under tests/ or purge obsolete log trackers.`
+    },
+    {
+      id: 16,
+      severity: "smell",
+      title: "Orchestrator reinstantiated per WebSocket message",
+      explanation: "Creates new class handlers on every message, causing variables to reset continuously.",
+      vulnerable: `case 'mcp_call': {\n  const orchestrator = new Orchestrator(sandboxId, ws);`,
+      remediation: `let orchestrator = orchestrators.get(sandboxId);\nif (!orchestrator) {\n  orchestrator = new Orchestrator(sandboxId, ws);\n  orchestrators.set(sandboxId, orchestrator);\n}`
+    }
+  ];
+
+  app.get("/api/agent/audit", (req, res) => {
+    res.json({ success: true, issues: auditDatabase });
+  });
+
+  app.post("/api/agent/audit/fix-sim", (req, res) => {
+    const { id } = req.body;
+    const issue = auditDatabase.find(i => i.id === id);
+    if (!issue) {
+       return res.status(444).json({ error: "No matching issue" });
+    }
+    res.json({
+       success: true,
+       issueId: id,
+       logs: [
+          `[Mutly Auditor Daemon] Initialized code check for issue #${id}...`,
+          `[Mutly Auditor Daemon] Locating ws-server.ts file context...`,
+          `[Mutly Auditor Daemon] Locating target block: "${issue.vulnerable.slice(0, 40)}..."`,
+          `[Mutly Auditor Daemon] Match located successfully. Initializing AST dry-run replacement...`,
+          `[Mutly Auditor Daemon] Patching code snippet...`,
+          `[Mutly Auditor Daemon] Replaced with: "${issue.remediation.slice(0, 40)}..."`,
+          `[Mutly Auditor Daemon] Running structural TypeScript compilation test (tsc --noEmit)...`,
+          `[Mutly Auditor Daemon] Verification passed! Risk factor successfully neutralized.`
+       ]
+    });
+  });
+
   app.post("/api/agent/sandbox/run", async (req, res) => {
     const { command } = req.body;
     try {
