@@ -77,40 +77,43 @@ export class ReporankAuditService {
       };
 
       return report;
-    } catch (error) {
-      console.error(chalk.red(`Reporank audit failed: ${error.message}`));
-      throw error;
+     } catch (error: unknown) {
+       const msg = error instanceof Error ? error.message : String(error);
+       console.error(chalk.red(`Reporank audit failed: ${msg}`));
+       throw error;
     }
   }
 
-  /**
-   * Get all files in directory recursively, excluding common directories
-   */
-  private getAllFiles(dir: string): string[] {
-    const result: string[] = [];
-    const entries = readdirSync(dir);
-    
-    for (const entry of entries) {
-      if (entry === "node_modules" || entry === ".git" || entry === "dist" || 
-          entry === ".next" || entry === "coverage" || entry === "db.json" || 
-          entry === "embeddings.json" || entry === "dist-server") {
-        continue;
-      }
-      
-      const full = join(dir, entry);
-      try {
-        if (statSync(full).isDirectory()) {
-          result.push(...this.getAllFiles(full));
-        } else {
-          result.push(relative(process.cwd(), full));
-        }
-      } catch {
-        // Skip files we can't stat
-      }
-    }
-    
-    return result;
-  }
+   /**
+    * Get all files in directory recursively, excluding common directories
+    */
+   private getAllFiles(dir: string, depth = 0): string[] {
+     if (depth > 10) return [];
+     
+     const result: string[] = [];
+     const entries = readdirSync(dir);
+     
+     for (const entry of entries) {
+       if (entry === "node_modules" || entry === ".git" || entry === "dist" || 
+           entry === ".next" || entry === "coverage" || entry === "db.json" || 
+           entry === "embeddings.json" || entry === "dist-server") {
+         continue;
+       }
+       
+       const full = join(dir, entry);
+       try {
+         if (statSync(full).isDirectory()) {
+           result.push(...this.getAllFiles(full, depth + 1));
+         } else {
+           result.push(relative(process.cwd(), full));
+         }
+       } catch {
+         // Skip files we can't stat
+       }
+     }
+     
+     return result;
+   }
 
   /**
    * Run vibe analysis on files (adapted from reporank)
@@ -159,22 +162,46 @@ export class ReporankAuditService {
     if (consoleLogs > 5) hygieneScore -= 15;
     hygieneScore = Math.max(0, hygieneScore);
 
-    return {
-      overall: Math.round(namingScore * 0.25 + modernityScore * 0.25 + hygieneScore * 0.20 + 75 * 0.15 + 65 * 0.15),
-      namingScore: Math.round(namingScore),
-      modernityScore,
-      hygieneScore,
-      configCoherence: 75, // Default values like in original
-      dependencyFreshness: 65,
-      recommendations: [
-        namingScore < 70 ? "Mixed naming conventions — pick one style" : "",
-        !hasAsync ? "Use async/await instead of callbacks" : "",
-        !hasHooks ? "Adopt React hooks pattern" : "",
-        !hasTS ? "Add TypeScript for type safety" : "",
-        consoleLogs > 5 ? `Remove ${consoleLogs} console.log statements` : "",
-        commented > 10 ? `Clean up ${commented} commented-out code blocks` : "",
-      ].filter(Boolean),
-    };
+     // Calculate config coherence based on presence of config files
+     let configCoherence = 50; // Start with middle value
+     const hasEslint = sources.some(f => f.path.endsWith(".eslintrc.js") || f.path.endsWith(".eslintrc.ts") || f.path === ".eslintrc");
+     const hasPrettier = sources.some(f => f.path.endsWith(".prettierrc") || f.path.endsWith(".prettierrc.js") || f.path === ".prettierrc");
+     const hasTsConfig = sources.some(f => f.path.endsWith("tsconfig.json"));
+     const hasPackageJson = sources.some(f => f.path.endsWith("package.json"));
+     
+     if (hasEslint) configCoherence += 15;
+     if (hasPrettier) configCoherence += 10;
+     if (hasTsConfig) configCoherence += 15;
+     if (hasPackageJson) configCoherence += 10;
+     configCoherence = Math.min(100, Math.max(0, configCoherence));
+     
+     // Calculate dependency freshness based on lockfile presence (simplified)
+     let dependencyFreshness = 50; // Start with middle value
+     const hasPackageLock = sources.some(f => f.path.endsWith("package-lock.json") || f.path.endsWith("yarn.lock") || f.path.endsWith("pnpm-lock.yaml"));
+     if (hasPackageLock) dependencyFreshness += 25; // Arbitrary bonus for having a lockfile
+     // In a real implementation, we'd check the age of the lockfile vs current date
+     dependencyFreshness = Math.min(100, Math.max(0, dependencyFreshness));
+     
+     return {
+       overall: Math.round(namingScore * 0.25 + modernityScore * 0.25 + hygieneScore * 0.20 + configCoherence * 0.15 + dependencyFreshness * 0.15),
+       namingScore: Math.round(namingScore),
+       modernityScore,
+       hygieneScore,
+       configCoherence,
+       dependencyFreshness,
+       recommendations: [
+         namingScore < 70 ? "Mixed naming conventions — pick one style" : "",
+         !hasAsync ? "Use async/await instead of callbacks" : "",
+         !hasHooks ? "Adopt React hooks pattern" : "",
+         !hasTS ? "Add TypeScript for type safety" : "",
+         consoleLogs > 5 ? `Remove ${consoleLogs} console.log statements` : "",
+         commented > 10 ? `Clean up ${commented} commented-out code blocks` : "",
+         !hasEslint ? "Add ESLint for code quality" : "",
+         !hasPrettier ? "Add Prettier for code formatting" : "",
+         !hasTsConfig ? "Add TypeScript config" : "",
+         !hasPackageLock ? "Add dependency lockfile" : "",
+       ].filter(Boolean),
+     };
   }
 
   /**
@@ -184,7 +211,7 @@ export class ReporankAuditService {
     const secretPatterns = [
       { name: "aws-access-key", pattern: /AKIA[0-9A-Z]{16}/g },
       { name: "github-token", pattern: /gh[pousr]_[A-Za-z0-9_]{36,}/g },
-      { name: "openai-api-key", pattern: /sk-[A-Za-z0-9]{20,}/g },
+       { name: "openai-api-key", pattern: /sk-(?:proj-|svcacct-)?[A-Za-z0-9_\-]{20,}/g },
       { name: "google-api-key", pattern: /AIza[0-9A-Za-z\-_]{35}/g },
       { name: "private-key", pattern: /-----BEGIN\s+(RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY-----/g },
       { name: "connection-string", pattern: /(postgresql|mysql|mongodb|redis):\/\/[^\s]{10,}/gi },
@@ -195,12 +222,17 @@ export class ReporankAuditService {
     const secrets: { type: string; line: number }[] = [];
     const lines = allContent.split("\n");
     
-    for (let i = 0; i < lines.length; i++) {
-      for (const p of secretPatterns) {
-        const matches = Array.from(lines[i].matchAll(p.pattern));
-        for (const m of matches) { if (m.index !== undefined && !m[0].includes("test") && !m[0].includes("example")) secrets.push({ type: p.name, line: i + 1 }); }
-      }
-    }
+     for (let i = 0; i < lines.length; i++) {
+       const lineLower = lines[i].toLowerCase();
+       if (lineLower.includes("test") || lineLower.includes("example")) continue;
+       
+       for (const p of secretPatterns) {
+         const matches = Array.from(lines[i].matchAll(p.pattern));
+         for (const m of matches) { 
+           if (m.index !== undefined) secrets.push({ type: p.name, line: i + 1 }); 
+         }
+       }
+     }
     
     return {
       secretsFound: secrets.length,
