@@ -3,10 +3,10 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 import ts from "typescript";
-import { exec } from "child_process";
 import type { LogEntry, MicroChange, ExecutionPlan, AgentStatus, RepositoryAnalysis } from "../src/types.js";
 import { cosineSimilarity } from "./vectorEngine.js";
 import type { EmbeddingChunk, FileEmbeddingMeta } from "./vectorEngine.js";
+import { clearFolder, copyFolder, executeIsolatedCommand } from "./sandboxEngine.js";
 
 const dbPath = path.resolve(process.cwd(), "db.json");
 const specFilePath = path.resolve(process.cwd(), "SPEC.md");

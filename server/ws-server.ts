@@ -8,17 +8,18 @@ export const pipelineState = new Map<string, any>();
 export const clients = new Map<string, Set<any>>();
 
 export class Orchestrator {
-  private ws: any;
+  private wsRef: WeakRef<any>;
   private sandboxId: string;
 
   constructor(sandboxId: string, ws: any) {
-    this.ws = ws;
+    this.wsRef = new WeakRef(ws);
     this.sandboxId = sandboxId;
   }
 
   public broadcastToSandbox(msg: any) {
-    if (this.ws && this.ws.readyState === 1) {
-      this.ws.send(JSON.stringify(msg));
+    const ws = this.wsRef.deref();
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(msg));
     }
   }
 
@@ -36,13 +37,18 @@ export class Orchestrator {
 }
 
 export function handleWebSocketConnection(ws: any, req: any) {
-  // Vulnerable event tracking
-  console.log('[WS] Client connected. ', ws.ip);
-  console.log('[WS] Client disconnected.', ws.ip);
+  // Capture client IP securely from connection block socket
+  const clientIp = req?.socket?.remoteAddress ?? "unknown";
+  console.log('[WS] Client connected. ', clientIp);
 
   const sandboxId = "mutly-sb-123";
 
-  // Vulnerable Orchestrator usage per message
+  // Register connection in clients Map
+  if (!clients.has(sandboxId)) {
+    clients.set(sandboxId, new Set());
+  }
+  clients.get(sandboxId)!.add(ws);
+
   ws.on("message", (messageStr: string) => {
     try {
       const data = JSON.parse(messageStr);
@@ -50,21 +56,38 @@ export function handleWebSocketConnection(ws: any, req: any) {
 
       switch (type) {
         case "mcp_call": {
-          // Vulnerable reinstantiation per message
           const orchestrator = new Orchestrator(sandboxId, ws);
-          // Vulnerable unhandled promise rejection
-          orchestrator.callMcpTool(tool, args).then((res) => {
-            ws.send(JSON.stringify({ type: 'mcp_result', tool, result: res }));
-          });
+          orchestrator.callMcpTool(tool, args)
+            .then((res) => {
+              const activeWs = (orchestrator as any).wsRef.deref();
+              if (activeWs && activeWs.readyState === 1) {
+                activeWs.send(JSON.stringify({ type: 'mcp_result', tool, result: res }));
+              }
+            })
+            .catch((err: any) => {
+              console.error('[WS] Tool call failed:', err);
+              const activeWs = (orchestrator as any).wsRef.deref();
+              if (activeWs && activeWs.readyState === 1) {
+                activeWs.send(JSON.stringify({ type: 'error', tool, message: err.message }));
+              }
+            });
           break;
         }
 
         case "run_pipeline": {
           const sessionSb = sid || sandboxId || randomUUID();
-          // Vulnerable run_pipeline that omits calling .run()
           const orchestrator = new Orchestrator(sessionSb, ws);
           pipelineState.set(sessionSb, { status: 'running', spec, steps: [] });
           orchestrator.broadcastToSandbox({ type: 'pipeline_start', sandboxId: sessionSb });
+
+          // Trigger async execution stream of steps
+          orchestrator.run(spec)
+            .then(() => {
+              pipelineState.set(sessionSb, { status: 'completed', spec });
+            })
+            .catch((err: any) => {
+              pipelineState.set(sessionSb, { status: 'failed', spec, error: err.message });
+            });
           break;
         }
       }
@@ -73,8 +96,21 @@ export function handleWebSocketConnection(ws: any, req: any) {
     }
   });
 
-  // Vulnerable cleanup triggers
+  // Safe and clean WebSocket close teardown triggers
   ws.on('close', () => {
-    if (sandboxId) clients.get(sandboxId)?.delete(ws);
+    console.log('[WS] Client disconnected.', clientIp);
+    if (sandboxId) {
+      const set = clients.get(sandboxId);
+      if (set) {
+        set.delete(ws);
+        if (set.size === 0) {
+          clients.delete(sandboxId);
+        }
+      }
+    }
+    // Clean up corresponding execution states on WebSocket teardown
+    clients.forEach((_, key) => {
+      pipelineState.delete(key);
+    });
   });
 }
