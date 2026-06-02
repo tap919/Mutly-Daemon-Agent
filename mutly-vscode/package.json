@@ -34,7 +34,17 @@
         "command": "mutly.sync",
         "title": "Mutly: Ingest Workspace Context"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Mutly",
+      "properties": {
+        "mutly.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Secure API key for accessing the local Mutly background daemon."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -46,6 +56,7 @@
   "devDependencies": {
     "@types/node": "^18.11.18",
     "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^2.19.0",
     "typescript": "^5.0.4"
   }
 }
