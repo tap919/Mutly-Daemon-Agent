@@ -29,6 +29,49 @@ interface Message {
   text: string;
   timestamp: string;
   diffSimulated?: boolean;
+  diffData?: {
+    filePath: string;
+    findContent: string;
+    replaceContent: string;
+    originalBlock: string;
+  } | null;
+  applied?: boolean;
+  applyError?: string | null;
+}
+
+function parseDiffFromText(text: string) {
+  const startIdx = text.indexOf("<<<<<<<");
+  const midIdx = text.indexOf("=======");
+  const endIdx = text.indexOf(">>>>>>>");
+
+  if (startIdx !== -1 && midIdx !== -1 && endIdx !== -1 && startIdx < midIdx && midIdx < endIdx) {
+    const beforeBlock = text.slice(Math.max(0, startIdx - 300), startIdx);
+    const fileRegex = /(?:File|Target|Path):\s*([a-zA-Z0-9_\-\.\/]+)/i;
+    const fileMatch = beforeBlock.match(fileRegex) || text.match(fileRegex);
+    let filePath = "";
+    if (fileMatch) {
+      filePath = fileMatch[1].trim();
+    } else {
+      if (text.toLowerCase().includes("app.tsx")) {
+        filePath = "src/App.tsx";
+      } else if (text.toLowerCase().includes("server.ts")) {
+        filePath = "server.ts";
+      } else {
+        filePath = "src/components/CodeAuditor.tsx";
+      }
+    }
+
+    const findContent = text.slice(startIdx + 7, midIdx).replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+    const replaceContent = text.slice(midIdx + 7, endIdx).replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+
+    return {
+      filePath,
+      findContent,
+      replaceContent,
+      originalBlock: text.slice(startIdx, endIdx + 7)
+    };
+  }
+  return null;
 }
 
 export default function IdeIntegrations({
@@ -107,13 +150,16 @@ export default function IdeIntegrations({
       });
       if (res.ok) {
         const data = await res.json();
+        const responseText = data.response || "No reply generated.";
+        const diffData = parseDiffFromText(responseText);
         setChatMessages((prev) => [
           ...prev,
           {
             sender: "mutly",
-            text: data.response || "No reply generated.",
+            text: responseText,
             timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
             diffSimulated: !!data.hasDiff,
+            diffData,
           },
         ]);
       } else {
@@ -387,9 +433,87 @@ export default function IdeIntegrations({
                     >
                       {msg.text}
 
-                      {/* Display a mock diff apply step in the chat */}
-                      {msg.diffSimulated && (
-                        <div className="mt-3 p-2 bg-zinc-950 border border-zinc-800 rounded text-[10px] space-y-2 font-mono">
+                      {/* Display a functional dynamic or fallback diff apply step in the chat */}
+                      {msg.diffData ? (
+                        <div className="mt-3 border border-zinc-805 rounded-lg overflow-hidden bg-zinc-950 font-mono text-[10px] space-y-2">
+                          <div className="bg-zinc-900/80 px-3 py-1.5 border-b border-zinc-800 flex items-center justify-between text-zinc-400">
+                            <span className="flex items-center gap-1 font-bold text-indigo-400 uppercase text-[9px]">
+                              <Zap className="w-3 h-3 text-indigo-400 animate-pulse" /> TARGET: {msg.diffData.filePath}
+                            </span>
+                            <span className="text-[8px] bg-zinc-950 px-1 py-0.2 rounded font-mono text-zinc-550 uppercase font-bold">
+                              Apply Diff
+                            </span>
+                          </div>
+                          <div className="p-2 space-y-2 divide-y divide-zinc-900 leading-normal">
+                            {msg.diffData.findContent && (
+                              <div className="pb-1.5">
+                                <div className="text-rose-500 font-bold uppercase text-[8px] tracking-wider mb-1">Original Content (-) :</div>
+                                <pre className="bg-rose-950/10 text-rose-300 p-2 border border-rose-950/30 rounded max-h-[80px] overflow-auto whitespace-pre">
+                                  {msg.diffData.findContent}
+                                </pre>
+                              </div>
+                            )}
+                            <div className="pt-1.5">
+                              <div className="text-emerald-500 font-bold uppercase text-[8px] tracking-wider mb-1">New Proposed Content (+) :</div>
+                              <pre className="bg-emerald-950/10 text-emerald-300 p-2 border border-emerald-950/30 rounded max-h-[80px] overflow-auto whitespace-pre">
+                                {msg.diffData.replaceContent}
+                              </pre>
+                            </div>
+                          </div>
+                          <div className="bg-zinc-900 p-2 border-t border-zinc-800 flex items-center justify-between gap-3 font-sans">
+                            {msg.applied ? (
+                              <span className="text-emerald-400 font-bold flex items-center gap-1 text-[9px] uppercase">
+                                <Check className="w-3.5 h-3.5" /> Patch Applied Successfully!
+                              </span>
+                            ) : (
+                              <button
+                                onClick={async () => {
+                                  if (!msg.diffData) return;
+                                  try {
+                                    const resp = await mutlyFetch("/api/agent/integrations/apply-diff-session", {
+                                      method: "POST",
+                                      body: JSON.stringify({
+                                        filePath: msg.diffData.filePath,
+                                        findContent: msg.diffData.findContent,
+                                        replaceContent: msg.diffData.replaceContent,
+                                      }),
+                                    });
+                                    if (resp.ok) {
+                                      setChatMessages((prev) =>
+                                        prev.map((m, idx) =>
+                                          idx === i ? { ...m, applied: true, applyError: null } : m
+                                        )
+                                      );
+                                    } else {
+                                      const errData = await resp.json();
+                                      setChatMessages((prev) =>
+                                        prev.map((m, idx) =>
+                                          idx === i ? { ...m, applyError: errData.error || "Failed to apply." } : m
+                                        )
+                                      );
+                                    }
+                                  } catch (err: any) {
+                                    setChatMessages((prev) =>
+                                      prev.map((m, idx) =>
+                                        idx === i ? { ...m, applyError: err.message } : m
+                                      )
+                                    );
+                                  }
+                                }}
+                                className="w-full bg-emerald-600 hover:bg-emerald-500 text-zinc-100 py-1 rounded text-[9px] font-bold tracking-wider uppercase transition-colors cursor-pointer"
+                              >
+                                Apply Workspace Patch
+                              </button>
+                            )}
+                          </div>
+                          {msg.applyError && (
+                            <div className="bg-rose-950/60 p-2 text-rose-305 border-t border-rose-900/40 text-[9px] leading-relaxed">
+                              ⚠️ Error: {msg.applyError}
+                            </div>
+                          )}
+                        </div>
+                      ) : msg.diffSimulated ? (
+                        <div className="mt-3 p-2 bg-zinc-950 border border-zinc-805 rounded text-[10px] space-y-2 font-mono">
                           <div className="text-emerald-400 flex items-center gap-1.5 font-bold uppercase text-[9px]">
                             <Zap className="w-3 h-3 fill-emerald-400/20 text-emerald-400" /> Code Diff generated for apply_diff
                           </div>
@@ -403,7 +527,7 @@ export default function IdeIntegrations({
                             Apply Workspace Patch
                           </button>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 ))}

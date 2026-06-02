@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { agentDaemon, getWorkspaceSymbols } from "./server/agentDaemon.js";
@@ -178,7 +179,9 @@ async function startServer() {
       if (apiKey) {
         const ai = new GoogleGenAI({ apiKey });
         const sysInst = `You are @mutly, the local developer-focused assistant. Be extremely helpful, concise, and professional. 
-If the user's issue implies editing, changing or refactoring code (e.g. fix, optimize, refactor, change, add), YOU MUST output a visual line diff block containing the specific marker <<<<<<< followed by standard conflict blocks (======= and >>>>>>>) so that the user interface can parse it and render an Apply Draft button. Ensure code blocks are nicely highlighted.`;
+If the user's issue implies editing, changing or refactoring code (e.g. fix, optimize, refactor, change, add), YOU MUST output a visual line diff block containing the specific marker <<<<<<< followed by standard conflict blocks (======= and >>>>>>>) so that the user interface can parse it and render an Apply Draft button. Ensure code blocks are nicely highlighted.
+IMPORTANT: Right before the opening <<<<<<< marker, write a single line identifying the target file relative to the workspace, in the precise format:
+File: relative_path_to_file (e.g., File: src/components/CodeAuditor.tsx or File: server.ts).`;
 
         const responseObj = await ai.models.generateContent({
           model: "gemini-2.5-flash",
@@ -199,6 +202,7 @@ If the user's issue implies editing, changing or refactoring code (e.g. fix, opt
 
 - We can make standard custom cookie guards safer by enforcing strict undefined checks.
 
+File: server.ts
 <<<<<<<
   function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
     if (process.env.NODE_ENV === "test") {
@@ -231,6 +235,33 @@ Try prompting me with a refactor question:
       }
     } catch (e: unknown) {
       res.status(500).json({ error: getErrorMessage(e) });
+    }
+  });
+
+  app.post("/api/agent/integrations/apply-diff-session", (req, res) => {
+    const { filePath, findContent, replaceContent } = req.body;
+    try {
+      const relPath = filePath as string;
+      const fullPath = path.resolve(process.cwd(), relPath);
+      if (!fullPath.startsWith(process.cwd())) {
+        return res.status(403).json({ error: "Access denied: File path escapes workspace." });
+      }
+      if (fs.existsSync(fullPath)) {
+        const code = fs.readFileSync(fullPath, "utf-8");
+        if (code.includes(findContent)) {
+          const updated = code.split(findContent).join(replaceContent);
+          fs.writeFileSync(fullPath, updated, "utf-8");
+          agentDaemon.addLog("success", `VS Code Extension: Applied file patch dynamically on "${relPath}"`);
+          agentDaemon.addMicroChange("/" + relPath, "modified", `~patched via VS Code Chat`);
+          return res.json({ success: true, filePath: relPath });
+        } else {
+          return res.status(400).json({ error: `Could not find exact original matching block in ${relPath}. No modifications were made.` });
+        }
+      } else {
+        return res.status(404).json({ error: `File not found in workspace: ${relPath}` });
+      }
+    } catch (e: unknown) {
+      return res.status(500).json({ error: getErrorMessage(e) });
     }
   });
 

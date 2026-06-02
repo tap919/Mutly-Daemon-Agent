@@ -1,0 +1,51 @@
+{
+  "name": "mutly",
+  "displayName": "Mutly Copilot Core Agent",
+  "description": "Mutly back-end local transport integration for VS Code Companion Chat",
+  "version": "0.1.0",
+  "publisher": "mutly-ai",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Language"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "mutly",
+        "name": "mutly",
+        "description": "Speak with the local background Mutly daemon and run tests or apply diffs.",
+        "isDefault": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "mutly.status",
+        "title": "Mutly: Show Daemon Status"
+      },
+      {
+        "command": "mutly.sync",
+        "title": "Mutly: Ingest Workspace Context"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^18.11.18",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.4"
+  }
+}
