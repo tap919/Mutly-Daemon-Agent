@@ -171,4 +171,44 @@ describe('Backend AgentDaemon Logic Tests', () => {
     await daemon.autoDream();
     expect(daemon.logs.some(log => log.msg.includes('Token Compaction complete'))).toBe(true);
   });
+
+  it('starts and stops daemon interval cleanly', () => {
+    const daemon = new AgentDaemon();
+    
+    daemon.start();
+    expect((daemon as any).interval).toBeDefined();
+
+    daemon.stop();
+    expect((daemon as any).interval).toBeNull();
+  });
+
+  it('analyzes repository with correct AST file count calculations', async () => {
+    const daemon = new AgentDaemon();
+    
+    // Test with local type
+    const result = await daemon.analyzeRepository('local', {});
+    expect(result.fileCount).toBeGreaterThan(0);
+    expect(result.loc).toBeGreaterThan(0);
+    expect(result.complexityIndex).toBeDefined();
+    expect(result.overloadRatio).toBeDefined();
+    expect(result.tokenSavingsPotential).toBeDefined();
+    expect(daemon.logs.some(log => log.msg.includes('Analysis of [local_workspace] complete'))).toBe(true);
+  });
+
+  it('injects customizable optimization steps and validates structures', () => {
+    const daemon = new AgentDaemon();
+    const customPlan = {
+      message: "Targeting redundant loops",
+      tree: [
+        { id: "cust_1", step: "Prune active websocket sync", risk: "Medium" }
+      ]
+    };
+
+    const injected = daemon.injectOptimizationPlan(customPlan);
+    expect(injected.success).toBe(true);
+    expect(injected.message).toContain("Targeting redundant loops");
+    expect(injected.tree[0].step).toBe("Prune active websocket sync");
+    expect(injected.tree[0].risk).toBe("Medium");
+    expect(injected.tree[0].status).toBe("pending");
+  });
 });

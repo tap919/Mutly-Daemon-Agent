@@ -9,6 +9,7 @@ import {
   Network,
 } from "lucide-react";
 import type { FullState } from "../types";
+import { mutlyFetch } from "../utils/api";
 
 export default function UltraPlan({
   agentState,
@@ -22,13 +23,14 @@ export default function UltraPlan({
     setPlanning(true);
     setError("");
     try {
-      const res = await fetch("/api/agent/plan", { method: "POST" });
+      const res = await mutlyFetch("/api/agent/plan", { method: "POST" });
       if (!res.ok) {
         const d = await res.json();
         throw new Error(d.error || "Execution failed");
       }
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
     } finally {
       setPlanning(false);
     }

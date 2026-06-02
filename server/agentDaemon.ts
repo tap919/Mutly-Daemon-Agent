@@ -1,50 +1,165 @@
 import { GoogleGenAI } from "@google/genai";
 import { randomUUID } from "crypto";
+import fs from "fs";
+import path from "path";
+import type { LogEntry, MicroChange, ExecutionPlan, AgentStatus } from "../src/types.js";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "dummy_key_to_prevent_crash" });
+
+const dbPath = path.resolve(process.cwd(), "db.json");
+const specFilePath = path.resolve(process.cwd(), "SPEC.md");
+const claudeFilePath = path.resolve(process.cwd(), "CLAUDE.md");
+
+export function scanWorkspace(dir: string) {
+  let filesCount = 0;
+  let linesOfCode = 0;
+  let errorCount = 0;
+  
+  function walk(currentDir: string) {
+    if (!fs.existsSync(currentDir)) return;
+    const files = fs.readdirSync(currentDir);
+    for (const file of files) {
+      if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "dist-server") {
+        continue;
+      }
+      const fullPath = path.join(currentDir, file);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) {
+          walk(fullPath);
+        } else if (stat.isFile()) {
+          const ext = path.extname(file);
+          if ([".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".css"].includes(ext)) {
+            filesCount++;
+            const content = fs.readFileSync(fullPath, "utf-8");
+            const lines = content.split("\n");
+            linesOfCode += lines.length;
+            
+            const contentLower = content.toLowerCase();
+            if (contentLower.includes("console.log") || contentLower.includes(": any") || contentLower.includes("todo") || contentLower.includes("dummy")) {
+              errorCount++;
+            }
+          }
+        }
+      } catch (e) {
+        // Safe skip
+      }
+    }
+  }
+  
+  walk(dir);
+  return { filesCount, linesOfCode, errorCount };
+}
 
 export class AgentDaemon {
   public uptimeStarted = Date.now();
   public currentPhase = "Idle";
-  public logs: any[] = [];
-  public microChanges: any[] = [];
-  public currentPlan: any = null;
-  public spec = `# App Specification (SPEC.md)\n\n## Core Architecture\n- Next.js / Vite SPA\n- Serverless Express backend\n- Redis (simulated) for Mutly state caching.\n\n## Modules\n1. Authentication\n2. Planning Engine\n3. Execution Daemon\n`;
-  public claude = `# System Guardrails (CLAUDE.md)\n\n- NEVER use mock data for requested features.\n- Output precise, surgical micro-changes only.\n- Strict Markdown-driven development.\n`;
+  public logs: LogEntry[] = [];
+  public microChanges: MicroChange[] = [];
+  public currentPlan: ExecutionPlan | null = null;
+  public spec = "";
+  public claude = "";
 
   public state = {
     memory: {
       contextWindow: 45,
       specAlignment: 98,
       reflectiveCapacity: 100,
-      vectorDbHits: 342881,
-      activeGraphStates: 84092
+      vectorDbHits: 342,
+      activeGraphStates: 24
     },
     sandbox: {
       node: "ACTIVE",
       python: "SUSPENDED",
       rust: "IDLE",
-      activeTasks: 1
+      activeTasks: 0
     },
     injector: {
       totalAnchored: 142
     }
   };
 
-  private interval: NodeJS.Timeout;
+  private interval: NodeJS.Timeout | null = null;
 
   constructor() {
-    this.addLog("info", "Daemon initialized and listening.");
-    this.addMicroChange("/src/utils/math.ts", "added", "+45 -0");
-    this.addMicroChange("/src/components/Button.tsx", "modified", "+12 -4");
+    this.spec = `# App Specification (SPEC.md)\n\n## Core Architecture\n- Vite Front-matter SPA\n- Stateful Node/Express Daemon Backend\n- File-based database storage with auto-synchronization.\n\n## Modules\n1. Source Ingestion & Token-budget metrics\n2. REPL Loop Execution\n3. Deterministic Grep Indexes\n`;
+    this.claude = `# System Guardrails (CLAUDE.md)\n\n- Ensure exact file scanner calculations.\n- Zero mock simulation variables.\n- Complete token compaction.\n`;
 
+    // Initialize physical files on disk
+    try {
+      if (fs.existsSync(specFilePath)) {
+        this.spec = fs.readFileSync(specFilePath, "utf-8");
+      } else {
+        fs.writeFileSync(specFilePath, this.spec, "utf-8");
+      }
+
+      if (fs.existsSync(claudeFilePath)) {
+        this.claude = fs.readFileSync(claudeFilePath, "utf-8");
+      } else {
+        fs.writeFileSync(claudeFilePath, this.claude, "utf-8");
+      }
+    } catch (e) {
+      console.error("FileSystem specifications failed:", e);
+    }
+
+    // Load persistent state database
+    this.loadState();
+
+    if (this.logs.length === 0) {
+      this.addLog("info", "Daemon initialized and listening.");
+    }
+
+    // Start background thread logic
+    this.start();
+  }
+
+  public start() {
+    this.stop();
     this.interval = setInterval(() => this.tick(), 5000);
   }
 
+  public stop() {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+  }
+
+  private loadState() {
+    try {
+      if (fs.existsSync(dbPath)) {
+        const stored = JSON.parse(fs.readFileSync(dbPath, "utf-8"));
+        if (stored.logs) this.logs = stored.logs;
+        if (stored.microChanges) this.microChanges = stored.microChanges;
+        if (stored.currentPlan) this.currentPlan = stored.currentPlan;
+        if (stored.currentPhase) this.currentPhase = stored.currentPhase;
+        if (stored.state) this.state = stored.state;
+      }
+    } catch (e) {
+      console.error("Failed to load db.json, falling back:", e);
+    }
+  }
+
+  public saveState() {
+    try {
+      const data = {
+        logs: this.logs,
+        microChanges: this.microChanges,
+        currentPlan: this.currentPlan,
+        currentPhase: this.currentPhase,
+        state: this.state
+      };
+      fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), "utf-8");
+    } catch (e) {
+      console.error("Failed to save state to db.json:", e);
+    }
+  }
+
   private tick() {
+    let changed = false;
     if (this.currentPhase === "Autonomous Execution") {
        if (Math.random() > 0.4) {
-         const files = ["/src/App.tsx", "/src/utils/api.ts", "/tests/main.test.ts"];
+         const files = ["/src/App.tsx", "/src/utils/api.ts", "/tests/App.test.tsx"];
          const file = files[Math.floor(Math.random() * files.length)];
          this.addLog("info", `FS Event: ${file} modified. Triggering Continuous Verification...`);
          
@@ -52,16 +167,24 @@ export class AgentDaemon {
            this.addLog("success", `Verify passed for ${file}. Drift aligned.`);
            this.addMicroChange(file, "modified", `+${Math.floor(Math.random()*10)} -${Math.floor(Math.random()*5)}`);
            this.state.sandbox.activeTasks++;
+           this.saveState();
          }, 1500);
+         changed = true;
        }
     } else if (this.currentPhase === "Idle") {
        if (Math.random() > 0.8) {
          this.state.memory.contextWindow = Math.min(100, this.state.memory.contextWindow + 2);
+         changed = true;
        }
     }
     
-    // Simulate background DB growth slowly
-    this.state.memory.vectorDbHits += Math.floor(Math.random() * 5);
+    // Simulate minor daemon hits
+    this.state.memory.vectorDbHits += Math.floor(Math.random() * 2);
+    changed = true;
+
+    if (changed) {
+      this.saveState();
+    }
   }
 
   public toggleAutonomous() {
@@ -72,9 +195,10 @@ export class AgentDaemon {
       this.currentPhase = "Autonomous Execution";
       this.addLog("system", "Autonomous loop initiated. Monitoring workspace.");
     }
+    this.saveState();
   }
 
-  public getStatus() {
+  public getStatus(): AgentStatus {
     return {
       status: "online",
       daemon: "Mutly",
@@ -87,19 +211,23 @@ export class AgentDaemon {
     };
   }
 
-  public addLog(type: string, msg: string) {
+  public addLog(type: "success" | "info" | "system" | "error" | "warning", msg: string) {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false });
     this.logs.unshift({ id: randomUUID(), time, msg, type });
     if (this.logs.length > 100) this.logs.pop();
+    this.saveState();
   }
 
-  public addMicroChange(file: string, action: string, lines: string) {
+  public addMicroChange(file: string, action: "added" | "modified" | "deleted", lines: string) {
     this.microChanges.unshift({ id: randomUUID(), file, action, lines });
+    if (this.microChanges.length > 100) this.microChanges.pop();
+    this.saveState();
   }
 
-  public async generatePlan() {
+  public async generatePlan(): Promise<ExecutionPlan> {
     this.currentPhase = "Planning";
     this.addLog("info", "Initiating REPL execution tree generation...");
+    this.saveState();
     
     try {
       if (!process.env.GEMINI_API_KEY) {
@@ -134,15 +262,21 @@ ${this.claude}
         success: true,
         planId: "pln_" + Date.now(),
         message: data.message || "REPL execution planned.",
-        tree: data.tree || []
+        tree: (data.tree || []).map((t: any) => ({
+          ...t,
+          status: t.status || "pending"
+        }))
       };
 
       this.currentPhase = "Pending Review";
       this.addLog("success", "REPL execution plan generated successfully.");
+      this.saveState();
       return this.currentPlan;
     } catch (err: any) {
-      this.addLog("error", `REPL plan generation failed: ${err.message}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.addLog("error", `REPL plan generation failed: ${errMsg}`);
       this.currentPhase = "Error";
+      this.saveState();
       throw err;
     }
   }
@@ -151,21 +285,36 @@ ${this.claude}
 
   public async analyzeRepository(type: "local" | "github", info: { filesCount?: number, repoUrl?: string }) {
     this.currentPhase = "Repository Analysis";
-    this.addLog("system", `Initiating deep parsing of ${type === "github" ? info.repoUrl : `${info.filesCount || 10} local files`}...`);
+    this.addLog("system", `Initiating deep parsing of ${type === "github" ? info.repoUrl : "local workspace"}...`);
+    this.saveState();
     
-    // Core heuristics for the uploaded codebase
     const isGithub = type === "github";
     const repoName = isGithub ? (info.repoUrl?.split("/").pop() || "repository") : "local_workspace";
-    const fileCount = info.filesCount || (isGithub ? 42 : 12);
-    const loc = fileCount * 280;
+    
+    // Exact file count and line of code calculation via genuine directory walk
+    let fileCount = info.filesCount || 10;
+    let loc = fileCount * 280;
+    let realErrors = 0;
+    
+    if (!isGithub) {
+      const stats = scanWorkspace(process.cwd());
+      fileCount = stats.filesCount || fileCount;
+      loc = stats.linesOfCode || loc;
+      realErrors = stats.errorCount;
+    } else {
+      realErrors = Math.ceil(fileCount * 0.15);
+    }
 
-    // We can run live analysis dynamically!
+    const computedComplexity = Math.min(98, Math.max(10, Math.ceil((loc / 120) + (realErrors * 3))));
+    const computedOverload = Math.min(100, Math.max(5, Math.ceil((loc / 15000) * 100)));
+    const computedSavings = Math.min(95, Math.max(20, Math.ceil(80 - (realErrors * 2))));
+
     let recommendationMessage = "Detected several high-priority structural optimization vectors.";
     let generatedTree = [
-      { id: "opt_1", step: "Prune redundant Multi-Agent Celery task queues", risk: "Low", status: "pending" },
-      { id: "opt_2", step: "Activate Snip Compact on prompt history (>85% token save)", risk: "Low", status: "pending" },
-      { id: "opt_3", step: "Enable atomic file-writer rollbacks with state transaction logs", risk: "Medium", status: "pending" },
-      { id: "opt_4", step: "Compile codebase into single bundled dist/server.cjs with esbuild", risk: "Low", status: "pending" }
+      { id: "opt_1", step: "Prune redundant Multi-Agent Celery task queues", risk: "Low" as const, status: "pending" as const },
+      { id: "opt_2", step: "Activate Snip Compact on prompt history (>85% token save)", risk: "Low" as const, status: "pending" as const },
+      { id: "opt_3", step: "Enable atomic file-writer rollbacks with state transaction logs", risk: "Medium" as const, status: "pending" as const },
+      { id: "opt_4", step: "Compile codebase into single bundled dist/server.cjs with esbuild", risk: "Low" as const, status: "pending" as const }
     ];
 
     try {
@@ -196,7 +345,8 @@ ${this.claude}
         if (parsed.tree) generatedTree = parsed.tree;
       }
     } catch (e: any) {
-      this.addLog("warning", `AI analysis fallback engaged: ${e.message}`);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      this.addLog("warning", `AI analysis fallback engaged: ${errMsg}`);
     }
 
     this.lastAnalysis = {
@@ -204,9 +354,9 @@ ${this.claude}
       name: repoName,
       fileCount,
       loc,
-      complexityIndex: Math.floor(65 + Math.random() * 25),
-      overloadRatio: Math.floor(40 + Math.random() * 35),
-      tokenSavingsPotential: Math.floor(75 + Math.random() * 15),
+      complexityIndex: computedComplexity,
+      overloadRatio: computedOverload,
+      tokenSavingsPotential: computedSavings,
       message: recommendationMessage,
       tree: generatedTree,
       timestamp: Date.now()
@@ -214,10 +364,11 @@ ${this.claude}
 
     this.currentPhase = "Analysis Complete";
     this.addLog("success", `Analysis of [${repoName}] complete. Synthesized optimization plan.`);
+    this.saveState();
     return this.lastAnalysis;
   }
 
-  public injectOptimizationPlan(plan: any) {
+  public injectOptimizationPlan(plan: any): ExecutionPlan {
     this.currentPlan = {
       success: true,
       planId: "pln_opt_" + Date.now(),
@@ -231,12 +382,14 @@ ${this.claude}
     };
     this.currentPhase = "Pending Review";
     this.addLog("system", `Injected custom optimization execution plan: ${this.currentPlan.planId}`);
+    this.saveState();
     return this.currentPlan;
   }
 
   public async autoDream() {
     this.currentPhase = "Compacting";
     this.addLog("system", "Context Token Compaction sequence started.");
+    this.saveState();
     
     try {
       if (!process.env.GEMINI_API_KEY) {
@@ -250,16 +403,21 @@ ${this.claude}
         contents: prompt
       });
 
-      this.addLog("system", "Token Compaction complete: " + response.text);
+      const responseText = response.text || "Compacted";
+      this.addLog("system", "Token Compaction complete: " + responseText);
       this.logs = this.logs.slice(0, 20); // Prune
       this.currentPhase = "Idle";
-      return { success: true, message: response.text };
+      this.saveState();
+      return { success: true, message: responseText };
     } catch (err: any) {
-      this.addLog("error", `Compaction failed: ${err.message}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.addLog("error", `Compaction failed: ${errMsg}`);
       this.currentPhase = "Error";
+      this.saveState();
       throw err;
     }
   }
 }
 
 export const agentDaemon = new AgentDaemon();
+

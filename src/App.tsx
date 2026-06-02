@@ -25,6 +25,7 @@ import Injector from "./components/Injector";
 import LandingPage from "./components/LandingPage";
 import SourceImport from "./components/SourceImport";
 import type { FullState } from "./types";
+import { mutlyFetch } from "./utils/api";
 
 export default function App() {
   const [appMode, setAppMode] = useState<"landing" | "dashboard">("landing");
@@ -34,7 +35,7 @@ export default function App() {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const res = await fetch("/api/agent/status");
+        const res = await mutlyFetch("/api/agent/status");
         if (res.ok) {
           const data = await res.json();
           setAgentState(data);
@@ -51,7 +52,7 @@ export default function App() {
 
   const triggerDream = async () => {
     try {
-      await fetch("/api/agent/dream", { method: "POST" });
+      await mutlyFetch("/api/agent/dream", { method: "POST" });
     } catch (e) {}
   };
 
@@ -156,7 +157,7 @@ export default function App() {
           </div>
           <button
             onClick={async () => {
-              await fetch("/api/agent/toggle-autonomous", { method: "POST" });
+              await mutlyFetch("/api/agent/toggle-autonomous", { method: "POST" });
             }}
             className={`mt-4 w-full flex items-center justify-center gap-2 py-2 px-3 rounded-md text-xs font-medium transition-colors border ${agentState?.status.currentPhase === "Autonomous Execution" ? "bg-indigo-600/20 text-indigo-300 border-indigo-500/30 hover:bg-indigo-600/30" : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-zinc-700"}`}
           >

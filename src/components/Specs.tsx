@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { FileCode, Save } from "lucide-react";
+import { mutlyFetch } from "../utils/api";
 
 export default function Specs() {
   const [specContent, setSpecContent] = useState("Loading...");
@@ -7,7 +8,7 @@ export default function Specs() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch("/api/agent/context")
+    mutlyFetch("/api/agent/context")
       .then((r) => r.json())
       .then((d) => {
         setSpecContent(d.spec);
@@ -18,7 +19,7 @@ export default function Specs() {
   const saveContext = async () => {
     setSaving(true);
     try {
-      await fetch("/api/agent/context", {
+      await mutlyFetch("/api/agent/context", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ spec: specContent, claude: claudeContent }),

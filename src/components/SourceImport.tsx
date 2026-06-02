@@ -19,6 +19,7 @@ import {
   Check
 } from "lucide-react";
 import type { FullState } from "../types";
+import { mutlyFetch } from "../utils/api";
 
 interface SourceImportProps {
   agentState: FullState | null;
@@ -62,7 +63,7 @@ export default function SourceImport({ agentState, setActiveTab }: SourceImportP
       // Trigger final server-side post to obtain metrics
       const triggerServerAnalysis = async () => {
         try {
-          await fetch("/api/agent/analyze", {
+          await mutlyFetch("/api/agent/analyze", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -110,7 +111,7 @@ export default function SourceImport({ agentState, setActiveTab }: SourceImportP
     setIsApplyingPlan(true);
 
     try {
-      const res = await fetch("/api/agent/inject-optimization-plan", {
+      const res = await mutlyFetch("/api/agent/inject-optimization-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan: agentState.lastAnalysis })
