@@ -499,6 +499,14 @@ export default function CodeAuditor({
                     </p>
                   </div>
 
+                  {/* Visual Simulation Warning */}
+                  <div className="bg-amber-500/5 border border-amber-500/15 text-amber-400/90 rounded-lg p-3 text-[11px] leading-relaxed flex items-start gap-2.5">
+                    <Server className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="font-semibold text-amber-300">Sandbox Simulation Safe Mode:</strong> Testing this patch compiles inside a sandboxed environment simulation wrapper. Actual local project repository files are protected from writes.
+                    </div>
+                  </div>
+
                   {/* Code toggle comparison tabs */}
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">

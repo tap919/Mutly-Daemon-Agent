@@ -99,15 +99,19 @@ Mutly secures both its dashboard and editor channels using API key guards. Follo
 
 ## 📋 Security & Environment Variables
 
-Create a `.env` file at your directory root by copying `.env.example`:
+Create a secure `.env` file at your directory root by copying `.env.example`.
+
+> ⚠️ **CRITICAL SECURITY NOTE:**
+> - **Insecure Key Defaults:** The default placeholder key `dev_mutly_secure_master_key` is intended **only** for quick local development boots. You **must** generate a strong, unique cryptographically secure secret (e.g. `openssl rand -hex 32`) for `MUTLY_API_KEY` in live deployments.
+> - **Client-side Bundling Hazard:** Do **not** use or bundle `VITE_MUTLY_API_KEY` in public client builds. Rely strictly on `Authorization: Bearer <key>` or `X-Mutly-API-Key` headers injected at runtime or securely stored user configurations.
+> - **Sandbox Limits Notice:** The target sandbox located under `/tmp/mutly-sandbox-workspace` provides **process-level directory separation and symlink safety state guards**. It does **not** provide strong hardware virtualization or hypervisor-level isolation. For untrusted, hostile execution spaces, you **must** wrap the Mutly process inside a hardened runtime layer like gVisor or Docker.
 
 ```ini
 # Gemini API Access Config
 GEMINI_API_KEY="your-gemini-api-key-here"
 
-# Secure Master Access Key for Daemon REST Endpoint protection
-MUTLY_API_KEY="dev_mutly_secure_master_key"
-VITE_MUTLY_API_KEY="dev_mutly_secure_master_key"
+# Secure Master Access Key for Daemon REST Endpoint protection (USE SECURE RANDOM STRING)
+MUTLY_API_KEY="your_secure_randomly_generated_token"
 ```
 
 ## 🔒 Security Assurances

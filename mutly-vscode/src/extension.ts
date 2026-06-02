@@ -231,7 +231,7 @@ function parseDiffFromText(text: string) {
             } else if (text.toLowerCase().includes("server.ts")) {
                 filePath = "server.ts";
             } else {
-                filePath = "src/components/CodeAuditor.tsx";
+                return null;
             }
         }
 

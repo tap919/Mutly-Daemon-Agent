@@ -36,24 +36,13 @@ async function startServer() {
     next();
   });
 
-  // Inject session cookie for authenticating any legitimate index loads
-  app.use((req, res, next) => {
-    if (req.path === "/" || req.path.endsWith(".html") || !req.path.includes(".")) {
-      res.cookie("mutly_session_token", MUTLY_API_KEY, { path: "/", sameSite: "lax" });
-    }
-    next();
-  });
-
   function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-    if (process.env.NODE_ENV === "test") {
-      return next();
-    }
-    const apiKey = req.headers["x-mutly-api-key"] || req.query.apiKey || getCookieHeader(req.headers.cookie, "mutly_session_token");
+    const apiKey = req.headers["x-mutly-api-key"] || req.headers["authorization"]?.toString().replace(/^Bearer\s+/i, "");
     console.log(`[Auth Check] Client Key Length: ${apiKey ? (apiKey as string).length : 0}, Expected Length: ${MUTLY_API_KEY.length}`);
     if (apiKey === MUTLY_API_KEY) {
       return next();
     }
-    console.warn(`[Auth Check Failed] Key Mismatch. Sending 401 response.`);
+    console.warn(`[Auth Check Failed] Key Mismatch or Missing. Sending 401 response.`);
     return res.status(401).json({ error: "Unauthorized: Invalid or missing X-Mutly-API-Key header." });
   }
 
@@ -243,7 +232,8 @@ Try prompting me with a refactor question:
     try {
       const relPath = filePath as string;
       const fullPath = path.resolve(process.cwd(), relPath);
-      if (!fullPath.startsWith(process.cwd())) {
+      const relPathCheck = path.relative(process.cwd(), fullPath);
+      if (relPathCheck.startsWith("..") || path.isAbsolute(relPathCheck)) {
         return res.status(403).json({ error: "Access denied: File path escapes workspace." });
       }
       if (fs.existsSync(fullPath)) {
@@ -271,6 +261,10 @@ Try prompting me with a refactor question:
       if (method === "mutly/read_file") {
         const relPath = (params && params.filePath) || "src/App.tsx";
         const fullPath = path.resolve(process.cwd(), relPath);
+        const relPathCheck = path.relative(process.cwd(), fullPath);
+        if (relPathCheck.startsWith("..") || path.isAbsolute(relPathCheck)) {
+          return res.status(403).json({ error: "Access denied: File path escapes workspace." });
+        }
         const fs = await import("fs");
         if (fs.existsSync(fullPath)) {
           const contents = fs.readFileSync(fullPath, "utf-8").slice(0, 1000) + "\n\n... [Truncated for preview] ...";
@@ -291,6 +285,7 @@ Try prompting me with a refactor question:
           jsonrpc: "2.0",
           result: {
             success: true,
+            isSimulation: true,
             filePath: (params && params.filePath) || "src/App.tsx",
             chunksApplied: 1,
             timeMs: 145
@@ -302,9 +297,10 @@ Try prompting me with a refactor question:
           jsonrpc: "2.0",
           result: {
             success: true,
+            isSimulation: true,
             command: (params && params.command) || "npm run lint",
             exitCode: 0,
-            stdout: "Compilation completed: No errors found in 14 modules.",
+            stdout: "Compilation completed (Simulation Stub): No errors found in 14 modules.",
             stderr: ""
           },
           id: 1
@@ -321,10 +317,11 @@ Try prompting me with a refactor question:
     try {
       res.json({
         success: true,
+        isSimulation: true,
         savedBytes: 15430,
         anchorsInjected: [
-          "SPEC.md: Section 3 Model Broker Rules",
-          "CLAUDE.md: System Command Interceptors"
+          "SPEC.md: Section 3 Model Broker Rules (Simulation)",
+          "CLAUDE.md: System Command Interceptors (Simulation)"
         ]
       });
     } catch (e: unknown) {
@@ -476,16 +473,17 @@ Try prompting me with a refactor question:
     }
     res.json({
        success: true,
+       isSimulation: true,
        issueId: id,
        logs: [
-          `[Mutly Auditor Daemon] Initialized code check for issue #${id}...`,
-          `[Mutly Auditor Daemon] Locating ws-server.ts file context...`,
-          `[Mutly Auditor Daemon] Locating target block: "${issue.vulnerable.slice(0, 40)}..."`,
-          `[Mutly Auditor Daemon] Match located successfully. Initializing AST dry-run replacement...`,
-          `[Mutly Auditor Daemon] Patching code snippet...`,
-          `[Mutly Auditor Daemon] Replaced with: "${issue.remediation.slice(0, 40)}..."`,
-          `[Mutly Auditor Daemon] Running structural TypeScript compilation test (tsc --noEmit)...`,
-          `[Mutly Auditor Daemon] Verification passed! Risk factor successfully neutralized.`
+          `[SIMULATION WORKSPACE] Initializing sandbox dry-run for issue #${id}...`,
+          `[SIMULATION WORKSPACE] Locating ws-server.ts file context...`,
+          `[SIMULATION WORKSPACE] Target match block located: "${issue.vulnerable.slice(0, 40)}..."`,
+          `[SIMULATION WORKSPACE] Simulating dry-run with AST replacement...`,
+          `[SIMULATION WORKSPACE] Applying mock patch template snippet...`,
+          `[SIMULATION WORKSPACE] Swapping with remediation block: "${issue.remediation.slice(0, 40)}..."`,
+          `[SIMULATION WORKSPACE] Running dry-run validation check (tsc --noEmit)...`,
+          `[SIMULATION COMPLETED] Verification cleared: Simulation results valid.`
        ]
     });
   });
