@@ -1,6 +1,0 @@
-{
-  "name": "Kairos Agent Console",
-  "description": "A dark, highly structured full-stack dashboard for the Karpathy-Anthropic autonomous coding framework.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
