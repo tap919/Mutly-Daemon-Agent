@@ -5,6 +5,8 @@ import path from "path";
 import ts from "typescript";
 import { exec } from "child_process";
 import type { LogEntry, MicroChange, ExecutionPlan, AgentStatus, RepositoryAnalysis } from "../src/types.js";
+import { cosineSimilarity } from "./vectorEngine.js";
+import type { EmbeddingChunk, FileEmbeddingMeta } from "./vectorEngine.js";
 
 const dbPath = path.resolve(process.cwd(), "db.json");
 const specFilePath = path.resolve(process.cwd(), "SPEC.md");
@@ -49,17 +51,6 @@ export function scanWorkspace(dir: string) {
   
   walk(dir);
   return { filesCount, linesOfCode, errorCount };
-}
-
-export interface EmbeddingChunk {
-  text: string;
-  embedding: number[];
-}
-
-export interface FileEmbeddingMeta {
-  filePath: string;
-  mtimeMs: number;
-  chunks: EmbeddingChunk[];
 }
 
 export interface SandboxLogEntry {
@@ -941,19 +932,11 @@ Strict rules:
         throw new Error("Could not construct embedding vector for query.");
       }
       
-      const dotProduct = (a: number[], b: number[]) => a.reduce((sum, val, i) => sum + val * b[i], 0);
-      const magnitude = (a: number[]) => Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-      const cosineSig = (a: number[], b: number[]) => {
-        const mA = magnitude(a);
-        const mB = magnitude(b);
-        return (mA === 0 || mB === 0) ? 0 : dotProduct(a, b) / (mA * mB);
-      };
-      
       const results: { filePath: string; text: string; score: number }[] = [];
       
       for (const fileMeta of this.fileEmbeddings) {
         for (const chunk of fileMeta.chunks) {
-          const score = cosineSig(queryVector, chunk.embedding);
+          const score = cosineSimilarity(queryVector, chunk.embedding);
           results.push({
             filePath: fileMeta.filePath,
             text: chunk.text,
