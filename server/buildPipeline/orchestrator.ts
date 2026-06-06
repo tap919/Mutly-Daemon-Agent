@@ -19,6 +19,8 @@
  * Every tool call must pass checkGate() against the current phase.
  */
 import path from "path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join as pathJoin, extname as pathExtname, relative as pathRelative } from "node:path";
 import { createPipelineState, type PipelineState, type PhaseResult } from "./pipelineTypes.js";
 import { p4_build, type BuildContext } from "./p4_build.js";
 import { createAutoCommitHook } from "./autoCommit.js";
@@ -33,6 +35,164 @@ import { DriftTracker, buildPhaseDrift } from "./driftScore.js";
 import { checkGate, ToolGatingError } from "./toolGating.js";
 import { workflowHash, stamp, type Provenance } from "./provenance.js";
 import { monitorAgentResult } from "./agentGuards.js";
+import { ReporankApiClient } from "../audit/reporankApiClient.js";
+import { logger } from "../lib/logger.js";
+
+const REPORANK_TIMEOUT_MS = 5000;
+const REPORANK_MAX_FILES = 50;
+const REPORANK_MAX_CONTENT = 30000;
+const REPORANK_MAX_DEPTH = 10;
+const REPORANK_SOURCE_EXTS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs",
+  ".java", ".rb", ".php", ".vue", ".svelte",
+]);
+const REPORANK_SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", ".next", "coverage",
+  "db.json", "embeddings.json", "dist-server", ".cache",
+]);
+
+export interface ReporankGrade {
+  label: string;
+  score: number | null;
+  gradeCategory: string;
+  maturityLevel: string;
+  summary: string;
+  findings: Array<{ severity: string; category: string; title: string; message: string }>;
+  recommendations: string[];
+  completedAt: number;
+  error?: string;
+  filesScanned: number;
+}
+
+/**
+ * Run a RepoRank scan on the given workspace and return a structured grade.
+ * Never throws — returns an error stub when RepoRank is unreachable.
+ */
+async function runReporankGrade(workspaceRoot: string, label: string): Promise<ReporankGrade> {
+  const completedAt = Date.now();
+  const files = collectReporankSourceFiles(workspaceRoot);
+  if (files.length === 0) {
+    return {
+      label,
+      score: null,
+      gradeCategory: "unknown",
+      maturityLevel: "unknown",
+      summary: "no source files in workspace",
+      findings: [],
+      recommendations: [],
+      completedAt,
+      error: "no source files in workspace",
+      filesScanned: 0,
+    };
+  }
+
+  try {
+    const client = new ReporankApiClient();
+    const repoName = workspaceRoot.split(/[/\\]/).filter(Boolean).pop() ?? "workspace";
+    const response = await Promise.race([
+      client.submitScan({
+        repoName,
+        files,
+        privateMode: true,
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), REPORANK_TIMEOUT_MS)),
+    ]);
+
+    if (!response?.result) {
+      logger.warn(`[reporank-pipeline] ${label}: RepoRank unreachable (timeout=${REPORANK_TIMEOUT_MS}ms)`);
+      return {
+        label,
+        score: null,
+        gradeCategory: "unknown",
+        maturityLevel: "unknown",
+        summary: "RepoRank unreachable",
+        findings: [],
+        recommendations: [],
+        completedAt,
+        error: "RepoRank unreachable",
+        filesScanned: files.length,
+      };
+    }
+
+    const r = response.result;
+    return {
+      label,
+      score: Math.round(r.overallScore ?? 0),
+      gradeCategory: r.gradeCategory ?? "unknown",
+      maturityLevel: r.maturityLevel ?? "unknown",
+      summary: r.summary ?? "",
+      findings: (r.findings ?? []).map((f) => ({
+        severity: f.severity,
+        category: f.category,
+        title: f.title,
+        message: f.message,
+      })),
+      recommendations: r.recommendations ?? [],
+      completedAt,
+      filesScanned: files.length,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`[reporank-pipeline] ${label}: RepoRank threw (${msg})`);
+    return {
+      label,
+      score: null,
+      gradeCategory: "unknown",
+      maturityLevel: "unknown",
+      summary: "RepoRank unreachable",
+      findings: [],
+      recommendations: [],
+      completedAt,
+      error: `RepoRank unreachable: ${msg}`,
+      filesScanned: files.length,
+    };
+  }
+}
+
+function collectReporankSourceFiles(workspaceRoot: string): Array<{ path: string; content: string }> {
+  try {
+    const allFiles = getAllReporankFiles(workspaceRoot, workspaceRoot, 0);
+    return allFiles
+      .filter((f) => REPORANK_SOURCE_EXTS.has(pathExtname(f)))
+      .slice(0, REPORANK_MAX_FILES)
+      .map((fp) => {
+        try {
+          const content = readFileSync(pathJoin(workspaceRoot, fp), "utf-8").slice(0, REPORANK_MAX_CONTENT);
+          return { path: fp, content };
+        } catch {
+          return null;
+        }
+      })
+      .filter((f): f is { path: string; content: string } => f !== null);
+  } catch {
+    return [];
+  }
+}
+
+function getAllReporankFiles(workspaceRoot: string, dir: string, depth: number): string[] {
+  if (depth > REPORANK_MAX_DEPTH) return [];
+  const result: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return result;
+  }
+  for (const entry of entries) {
+    if (REPORANK_SKIP_DIRS.has(entry)) continue;
+    const full = pathJoin(dir, entry);
+    try {
+      if (statSync(full).isDirectory()) {
+        result.push(...getAllReporankFiles(workspaceRoot, full, depth + 1));
+      } else {
+        result.push(pathRelative(workspaceRoot, full));
+      }
+    } catch {
+      // skip unreadable
+    }
+  }
+  return result;
+}
 
 export interface OrchestratorOptions {
   /** Workspace path. */
@@ -59,6 +219,13 @@ export interface OrchestratorResult {
   planProvenance: Provenance | null;
   /** Total wall-clock duration. */
   durationMs: number;
+  /** RepoRank grades captured at each pipeline hook. */
+  reporankGrades: {
+    baseline: ReporankGrade | undefined;
+    audit: ReporankGrade | undefined;
+    build: ReporankGrade | undefined;
+    final: ReporankGrade | undefined;
+  };
 }
 
 export async function runPipeline(opts: OrchestratorOptions): Promise<OrchestratorResult> {
@@ -96,6 +263,27 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
   }
 
   // ── 4. INGEST + AUDIT + PLAN (skipped if prePlan given) ──
+  // Always walk INGEST → AUDIT → PLAN so the FSM is well-formed in both
+  // prePlan and headless modes.  The prePlan case just sets a richer
+  // plan output when we reach PLAN.
+  loop.transition("INGEST", { message: opts.prePlan ? "ingesting workspace" : "phase not executed in headless mode (no prePlan provided)" });
+  const baselineGrade = await runReporankGrade(opts.workspaceRoot, "baseline");
+  state.phases.ingest = {
+    id: "ingest", status: "passed",
+    output: {
+      workspacePath: opts.workspaceRoot,
+      note: opts.prePlan ? "ingest via prePlan" : "phase not executed in headless mode (no prePlan provided)",
+      reporankBaseline: baselineGrade,
+    },
+  } as any;
+
+  loop.transition("AUDIT", { message: opts.prePlan ? "RepoRank audit scan" : "phase not executed in headless mode (no prePlan provided)" });
+  const auditGrade = await runReporankGrade(opts.workspaceRoot, "audit");
+  state.phases.audit = {
+    id: "audit", status: "passed",
+    output: { issues: [], reporankResult: auditGrade },
+  } as any;
+
   if (opts.prePlan) {
     const planProv = stamp({ tree: opts.prePlan.tree }, provenanceFor("ai", profile.model, `plan-from-options`, wfHash));
     state.phases.plan = {
@@ -104,17 +292,7 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
     state.iterationCount = 0;
     loop.ok("PLAN", { message: "plan injected from options" });
   } else {
-    // For the orchestrator-level demo, the heavy ingest/audit phases require
-    // live dependencies (Vibeserve, RepoRank). The orchestrator's job is to
-    // own the *plumbing* (workflow, profile, gates, drift, commits, terminal
-    // signals). Phase logic is delegated to existing p1..p7 functions when
-    // the host can supply them; otherwise we mark phases passed with a note.
-    const note = "phase not executed in headless mode (no prePlan provided)";
-    loop.transition("INGEST", { message: note });
-    state.phases.ingest = { id: "ingest", status: "passed", output: { workspacePath: opts.workspaceRoot, note } } as any;
-    loop.transition("AUDIT", { message: note });
-    state.phases.audit = { id: "audit", status: "passed", output: { issues: [] } } as any;
-    loop.transition("PLAN", { message: note });
+    loop.transition("PLAN", { message: "phase not executed in headless mode (no prePlan provided)" });
     state.phases.plan = { id: "plan", status: "passed", output: { plan: { tree: [] } } } as any;
   }
 
@@ -209,6 +387,22 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
     loop.transition("READY", { message: "iterate loop exhausted; proceeding to ready" });
   }
 
+  // ── RepoRank BUILD + FINAL scans ────────────────────────
+  // Done after the iteration loop so the build grade reflects the final
+  // state of the workspace, and so we don't lose the grade to a build
+  // overwrite inside the ITERATE branch.
+  const buildGrade = await runReporankGrade(opts.workspaceRoot, "build");
+  state.phases.build = {
+    ...state.phases.build,
+    output: { ...(state.phases.build.output ?? {}), reporankResult: buildGrade },
+  } as any;
+
+  const finalGrade = await runReporankGrade(opts.workspaceRoot, "final");
+  state.phases.review = {
+    ...state.phases.review,
+    output: { ...(state.phases.review.output ?? {}), reporankResult: finalGrade },
+  } as any;
+
   // ── 9. READY → DONE ─────────────────────────────────────
   // Avoid double-transition: nextAfterReview may already have set READY.
   if (loop.state !== "READY") {
@@ -233,6 +427,10 @@ function finalize(
   events: OrchestratorResult["loop"]["events"],
   driftReport?: ReturnType<DriftTracker["report"]>
 ): OrchestratorResult {
+  const ingestOut = state.phases.ingest?.output as any;
+  const auditOut = state.phases.audit?.output as any;
+  const buildOut = state.phases.build?.output as any;
+  const reviewOut = state.phases.review?.output as any;
   return {
     state,
     config,
@@ -247,6 +445,12 @@ function finalize(
     commits,
     planProvenance: _planProv,
     durationMs: performance.now() - t0,
+    reporankGrades: {
+      baseline: ingestOut?.reporankBaseline,
+      audit: auditOut?.reporankResult,
+      build: buildOut?.reporankResult,
+      final: reviewOut?.reporankResult,
+    },
   };
 }
 
