@@ -35,7 +35,10 @@
     "drift_threshold": 0.3,
     "review_threshold": 0.4,
     "approval_policy": {
-      "require_for": ["delete_file", "deploy"]
+      "require_for": [
+        "delete_file",
+        "deploy"
+      ]
     },
     "default_template": "build"
   },
