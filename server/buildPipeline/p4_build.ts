@@ -17,6 +17,7 @@ import { PipelineState, PhaseResult, isStructuredBuildStep, type BuildStep } fro
 import { executeBuildStep, type StepContext, type StepResult as FsStepResult } from "./fileStepExecutor.js";
 import { callVibeServeTool, isVibeServeEnabled } from "../tools/mcp/mcpVibeServeClient.js";
 import path from "path";
+import fs from "fs";
 
 export interface BuildContext extends StepContext {
   /** If true, the executor will record per-step file changes (no auto-commit here). */
@@ -29,12 +30,16 @@ export interface BuildContext extends StepContext {
 }
 
 export async function p4_build(state: PipelineState, ctx: BuildContext): Promise<PhaseResult> {
-  const planResult = state.phases["plan"]?.output as any;
-  if (!planResult?.plan) {
+  // Two callers pass the plan in different formats:
+  //   pipelineRunner: phases["plan"].output = ExecutionPlan (direct, has .tree)
+  //   orchestrator:   phases["plan"].output = { plan: ExecutionPlan } (wrapped)
+  const raw = state.phases["plan"]?.output as any;
+  const planResult = raw?.plan || raw;
+  if (!planResult?.tree) {
     throw new Error("No plan available. Run PLAN phase first.");
   }
 
-  const plan = planResult.plan;
+  const plan = planResult;
   if (!plan.tree || plan.tree.length === 0) {
     return {
       id: "build",
@@ -164,6 +169,3 @@ export async function p4_build(state: PipelineState, ctx: BuildContext): Promise
     completedAt: Date.now(),
   };
 }
-
-// Re-export path for callers that only import from buildPipeline/
-export { path };

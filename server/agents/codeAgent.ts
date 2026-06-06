@@ -43,6 +43,8 @@ export class CodeAgent extends BaseAgent {
     const singleStep = task.input.step as Record<string, unknown> | undefined;
     const planSteps = task.input.steps as Array<Record<string, unknown>> | undefined;
 
+    console.error("[codeAgent] steps:", planSteps?.length ?? "none", "singleStep:", !!singleStep);
+
     // Single structured step → apply directly.
     if (singleStep && isStructuredBuildStep(singleStep)) {
       return this.applyStructuredStep(singleStep as BuildStep, ctx, startMs);
@@ -50,6 +52,7 @@ export class CodeAgent extends BaseAgent {
 
     // Multiple steps → delegate to p4_build for the full phase logic.
     if (planSteps && planSteps.length > 0) {
+      console.error("[codeAgent] delegating to p4_build via runPhase. plan output:", JSON.stringify(ctx.pipelineState.phases?.plan?.output).slice(0, 200));
       return this.runPhase(ctx, startMs);
     }
 
