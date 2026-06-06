@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import { loadConfig, saveConfig } from "../../../server/settings/loader.js";
 import { clearFlags, setFlag } from "../../../server/settings/sessionOverrides.js";
+import type { MutlyConfig } from "../../../server/settings/configSchema.js";
 
 let tmpDir: string;
 
@@ -120,6 +121,13 @@ describe("saveConfig", () => {
           reporank: { enabled: true, url: "http://localhost:3001" },
           google_ax: { enabled: false, endpoint: "", project: "" },
         },
+        model_router: {
+          enabled: true,
+          default_model: "gemini-2.5-flash",
+          fallback_model: "gemini-2.5-flash",
+          use_litellm: true,
+          use_opencode: false,
+        },
         pipeline: {
           drift_threshold: 0.3,
           review_threshold: 0.4,
@@ -164,6 +172,13 @@ describe("saveConfig", () => {
           reporank: { enabled: true, url: "http://localhost:3001" },
           google_ax: { enabled: false, endpoint: "", project: "" },
         },
+        model_router: {
+          enabled: true,
+          default_model: "gemini-2.5-flash",
+          fallback_model: "gemini-2.5-flash",
+          use_litellm: true,
+          use_opencode: false,
+        },
         pipeline: {
           drift_threshold: 0.3,
           review_threshold: 0.4,
@@ -205,6 +220,13 @@ describe("saveConfig", () => {
         reporank: { enabled: true, url: "http://localhost:3001" },
         google_ax: { enabled: false, endpoint: "", project: "" },
       },
+      model_router: {
+        enabled: true,
+        default_model: "gemini-2.5-flash",
+        fallback_model: "gemini-2.5-flash",
+        use_litellm: true,
+        use_opencode: false,
+      },
       pipeline: {
         drift_threshold: 0.2,
         review_threshold: 0.5,
@@ -219,7 +241,7 @@ describe("saveConfig", () => {
       },
     };
 
-    const saved = saveConfig(config, tmpDir);
+    const saved = saveConfig(config as MutlyConfig, tmpDir);
     expect(saved).toBe(true);
 
     const loaded = loadConfig(tmpDir);

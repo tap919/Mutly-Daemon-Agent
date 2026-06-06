@@ -91,10 +91,12 @@ export class LiteLLMAdapter {
 
     if (this.genai) {
       try {
-        const geminiModel = this.genai.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const result = await geminiModel.generateContent(prompt);
+        const result = await this.genai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+        });
         return {
-          text: result.response.text(),
+          text: result.text || "",
           model: "gemini-2.5-flash",
           usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
           provider: "gemini-genai",
