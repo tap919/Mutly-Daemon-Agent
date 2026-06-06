@@ -2,6 +2,8 @@ import { Router } from "express";
 import { loadConfig, saveConfig } from "./loader.js";
 import { MutlyConfigSchema } from "./configSchema.js";
 import { setFlag, removeFlag, clearFlags } from "./sessionOverrides.js";
+import { litellmAdapter } from "../routing/litellmAdapter.js";
+import { getConfig } from "../config.js";
 
 /**
  * Env vars that are safe to show in the UI (no secrets).
@@ -15,6 +17,7 @@ const SAFE_TO_SHOW = new Set([
   "PORT",
   "MUTLY_DEFAULT_MODEL",
   "MUTLY_FALLBACK_MODEL",
+  "MUTLY_USE_LITELLM",
   "VIBESERVE_MCP_URL",
   "REPORANK_API_URL",
   "REPORANK_ENABLED",
@@ -133,6 +136,33 @@ export function createSettingsRouter(settingsDir?: string): Router {
   router.post("/settings/reload/soul", (_req, res) => {
     const merged = loadConfig(settingsDir);
     res.json({ ok: true, soul: merged.soul });
+  });
+
+  // Model management via LiteLLM
+  router.get("/models", async (_req, res) => {
+    try {
+      const models = await litellmAdapter.listModels();
+      res.json({ models, defaultModel: getConfig().MUTLY_DEFAULT_MODEL });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post("/models/select", async (req, res) => {
+    try {
+      const { model } = req.body || {};
+      if (typeof model !== "string" || !model) {
+        return res.status(400).json({ error: "model (string) required" });
+      }
+      const available = await litellmAdapter.listModels();
+      if (!available.includes(model)) {
+        return res.status(400).json({ error: `Model ${model} not available` });
+      }
+      process.env.MUTLY_DEFAULT_MODEL = model;
+      res.json({ model, status: "selected" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   return router;

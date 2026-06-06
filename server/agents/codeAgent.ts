@@ -23,6 +23,8 @@ import { isStructuredBuildStep, type BuildStep } from "../buildPipeline/pipeline
 import { executeBuildStep, type StepContext } from "../buildPipeline/fileStepExecutor.js";
 import { p4_build, type BuildContext } from "../buildPipeline/p4_build.js";
 import { createAutoCommitHook } from "../buildPipeline/autoCommit.js";
+import { litellmAdapter } from "../routing/litellmAdapter.js";
+import { getConfig } from "../config.js";
 
 export class CodeAgent extends BaseAgent {
   readonly name = "code";
@@ -71,6 +73,24 @@ export class CodeAgent extends BaseAgent {
     startMs: number
   ): Promise<AgentResult> {
     const stepCtx: StepContext = { workspaceRoot: ctx.workspacePath ?? process.cwd() };
+
+    // Use litellmAdapter to generate code content for create_file steps if content is not provided
+    if (step.action === "create_file" && !step.content) {
+      const config = getConfig();
+      const model = config.MUTLY_DEFAULT_MODEL;
+      try {
+        const prompt = `Generate the content for file: ${step.filePath}\n\nStep description: ${step.description || step.id}`;
+        const genResult = await litellmAdapter.generate(prompt, {
+          model,
+          system: "You are a code generation assistant. Generate clean, production-ready code.",
+          maxTokens: 4096,
+        });
+        step.content = genResult.text;
+      } catch {
+        ctx.log("warn", "litellm code generation failed, proceeding without content");
+      }
+    }
+
     const result = await executeBuildStep(step, stepCtx);
     if (!result.success) {
       return this.failure(
