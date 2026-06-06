@@ -44,9 +44,22 @@ async function startServer() {
 
   app.use(express.json({ limit: "2mb" }));
 
-  // Auth middleware: all /api/* routes require X-Mutly-API-Key
-  // Must register before any routes on /api to protect them.
-  // SPA gets the key via /api/agent/public-config (registered before auth).
+  // Dev-only public config — must be registered BEFORE auth middleware
+  // to break the chicken-and-egg problem: the SPA needs to call this
+  // endpoint to get the dev API key before it can auth its own requests.
+  app.get("/api/agent/public-config", (_req, res) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(404).json({ error: "Not available" });
+    }
+    res.json({
+      port: PORT,
+      vibeserveEnabled: isVibeServeEnabled(),
+      devApiKeyHint: process.env.MUTLY_API_KEY ? null : "dev_mutly_secure_master_key",
+      nodeEnv: process.env.NODE_ENV || "development",
+    });
+  });
+
+  // Auth middleware: all remaining /api/* routes require X-Mutly-API-Key
   app.use("/api", authMiddleware);
 
   // Settings control plane — runtime config, toggles, env
@@ -92,19 +105,7 @@ async function startServer() {
        return res.sendStatus(200);
      }
      next();
-   });
-
-  // Dev-only public config (no secrets in production)
-  app.get("/api/agent/public-config", (_req, res) => {
-    if (process.env.NODE_ENV === "production") {
-      return res.status(404).json({ error: "Not available" });
-    }
-    res.json({
-      port: PORT,
-      devApiKeyHint: process.env.MUTLY_API_KEY ? null : "dev_mutly_secure_master_key",
-      vibeserveEnabled: isVibeServeEnabled(),
     });
-  });
 
   // Helper for message rendering
   const getErrorMessage = (e: unknown): string => {
