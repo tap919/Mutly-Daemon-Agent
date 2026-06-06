@@ -19,6 +19,24 @@ import { parseSoulFile, type SoulConfig } from "./soulParser.js";
 import { readHeartbeat, type HeartbeatData } from "./heartbeat.js";
 import { getAllFlags } from "./sessionOverrides.js";
 import { getConfig as getEnvConfig } from "../config.js";
+import { resolvePathInWorkspace } from "../lib/workspacePaths.js";
+
+/**
+ * Resolve a config file path safely. Absolute paths are allowed only if
+ * they resolve inside the settings directory. Relative paths are resolved
+ * via resolvePathInWorkspace to prevent path traversal escapes.
+ */
+function resolveConfigPath(dir: string, filePath: string): string | null {
+  const root = path.resolve(dir);
+  if (path.isAbsolute(filePath)) {
+    const resolved = path.resolve(filePath);
+    const rootSep = root.endsWith(path.sep) ? root : root + path.sep;
+    if (resolved === root || resolved.startsWith(rootSep)) return resolved;
+    return null;
+  }
+  const result = resolvePathInWorkspace(dir, filePath);
+  return result.ok ? result.fullPath : null;
+}
 
 export interface MergedSettings {
   config: MutlyConfig;
@@ -55,16 +73,22 @@ export function loadConfig(settingsDir?: string): MergedSettings {
 
   // 2. Load mutly.soul.md (priority 1 source — optional, sets identity defaults)
   const soulFile = config.agent.soul_file;
-  const soulPath = path.isAbsolute(soulFile) ? soulFile : path.join(dir, soulFile);
-  const soul = parseSoulFile(soulPath);
-  if (soul.error && soul.error !== "File not found") {
-    errors.push(`soul.md: ${soul.error}`);
+  const soulPath = resolveConfigPath(dir, soulFile);
+  let soul = parseSoulFile("/dev/null"); // placeholder
+  if (!soulPath) {
+    errors.push(`soul.md: path '${soulFile}' escapes workspace — using defaults`);
+    soul = { config: null, body: "" };
+  } else {
+    soul = parseSoulFile(soulPath);
+    if (soul.error && soul.error !== "File not found") {
+      errors.push(`soul.md: ${soul.error}`);
+    }
   }
 
   // 3. Read heartbeat (telemetry — not a config source, just observed state)
   const hbFile = config.agent.heartbeat_file;
-  const hbPath = path.isAbsolute(hbFile) ? hbFile : path.join(dir, hbFile);
-  const heartbeat = readHeartbeat(hbPath);
+  const hbPath = resolveConfigPath(dir, hbFile);
+  const heartbeat = hbPath ? readHeartbeat(hbPath) : null;
 
   // 4. Environment variables (read-only in the UI, restart required to change)
   const env = getEnvConfig() as unknown as Record<string, unknown>;

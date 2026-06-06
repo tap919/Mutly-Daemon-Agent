@@ -44,6 +44,11 @@ async function startServer() {
 
   app.use(express.json({ limit: "2mb" }));
 
+  // Auth middleware: all /api/* routes require X-Mutly-API-Key
+  // Must register before any routes on /api to protect them.
+  // SPA gets the key via /api/agent/public-config (registered before auth).
+  app.use("/api", authMiddleware);
+
   // Settings control plane — runtime config, toggles, env
   app.use("/api", createSettingsRouter());
 
@@ -147,8 +152,6 @@ async function startServer() {
     logger.warn({ url: req.originalUrl }, "Auth check failed");
     return res.status(401).json({ error: "Unauthorized: Invalid or missing X-Mutly-API-Key header." });
   }
-
-  app.use("/api", authMiddleware);
 
   // Approval Routes
   app.get("/api/agent/approvals", async (req, res) => {
