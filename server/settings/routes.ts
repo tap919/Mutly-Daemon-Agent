@@ -15,16 +15,16 @@ function maskEnvVars(env: Record<string, unknown>): Record<string, unknown> {
   return masked;
 }
 
-export function createSettingsRouter(): Router {
+export function createSettingsRouter(settingsDir?: string): Router {
   const router = Router();
 
   router.get("/settings", (_req, res) => {
-    const merged = loadConfig();
+    const merged = loadConfig(settingsDir);
     res.json({ ok: true, ...merged });
   });
 
   router.get("/settings/config", (_req, res) => {
-    const merged = loadConfig();
+    const merged = loadConfig(settingsDir);
     res.json({ ok: true, config: merged.config, errors: merged.errors });
   });
 
@@ -36,7 +36,7 @@ export function createSettingsRouter(): Router {
         error: parsed.error.issues.map(i => i.path.join(".") + ": " + i.message).join("; "),
       });
     }
-    const result = saveConfig(parsed.data);
+    const result = saveConfig(parsed.data, settingsDir);
     if (result !== true) {
       return res.status(400).json({ ok: false, error: result });
     }
@@ -64,13 +64,13 @@ export function createSettingsRouter(): Router {
   });
 
   router.get("/settings/env", (_req, res) => {
-    const merged = loadConfig();
+    const merged = loadConfig(settingsDir);
     const masked = maskEnvVars(merged.env);
     res.json({ ok: true, env: masked });
   });
 
   router.post("/settings/reload/soul", (_req, res) => {
-    const merged = loadConfig();
+    const merged = loadConfig(settingsDir);
     res.json({ ok: true, soul: merged.soul });
   });
 
