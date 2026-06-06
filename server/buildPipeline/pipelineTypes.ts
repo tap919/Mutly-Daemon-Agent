@@ -66,7 +66,15 @@ export interface BuildStepBase {
   id: string;
   description?: string;
   risk?: "Low" | "Medium" | "High";
+  /** GoalBuddy oracle pattern: observable success signal (oracle) this step must satisfy. */
+  oracle?: OracleDef;
 }
+
+export type OracleDef =
+  | { kind: "test"; command: string }
+  | { kind: "file_content"; filePath: string; contains: string }
+  | { kind: "file_exists"; filePath: string }
+  | { kind: "artifact_hash"; filePath: string; expectedSha: string };
 
 export interface CreateFileStep extends BuildStepBase {
   action: "create_file";
