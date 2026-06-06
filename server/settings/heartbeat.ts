@@ -16,8 +16,8 @@ export function writeHeartbeat(filePath: string, data: Partial<HeartbeatData>): 
     const dir = path.dirname(filePath);
     if (dir) fs.mkdirSync(dir, { recursive: true });
     const existing = readHeartbeat(filePath);
+    const lastSeen = new Date().toISOString();
     const merged: HeartbeatData = {
-      last_seen: new Date().toISOString(),
       uptime_seconds: 0,
       phase: "idle",
       active_sessions: 0,
@@ -26,7 +26,7 @@ export function writeHeartbeat(filePath: string, data: Partial<HeartbeatData>): 
       heartbeat_interval_seconds: 30,
       ...existing,
       ...data,
-      last_seen: new Date().toISOString(),
+      last_seen: lastSeen,
     };
     fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), "utf-8");
     return true;
