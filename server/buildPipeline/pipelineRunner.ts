@@ -217,6 +217,7 @@ export class PipelineRunner {
   /** Run all phases in sequence, with ITERATE loop */
   async runAll(pipelineId: string): Promise<PipelineState> {
     const order: PhaseId[] = ["ingest", "audit", "plan", "build", "review"];
+    const maxIterations = parseInt(process.env.MUTLY_MAX_ITERATIONS || "5", 10);
 
     for (const phaseId of order) {
       const cur = await this.getState(pipelineId);
@@ -228,8 +229,9 @@ export class PipelineRunner {
       }
     }
 
-    // ITERATE loop
-    for (let attempt = 0; attempt < 3; attempt++) {
+    // ITERATE loop with convergence check
+    let previousDeltaSize = Infinity;
+    for (let attempt = 0; attempt < maxIterations; attempt++) {
       const cur = await this.getState(pipelineId);
       if (cur?.status === "failed") break;
 
@@ -240,6 +242,11 @@ export class PipelineRunner {
         if (output.passed) break;
 
         if (output.deltaPlan?.tree?.length > 0) {
+          const deltaSize = output.deltaPlan.tree.length;
+          // Convergence: if delta plan isn't shrinking, stop iterating
+          if (deltaSize >= previousDeltaSize) break;
+          previousDeltaSize = deltaSize;
+
           // Inject the delta plan for the next iteration
           await this.pipelineStore.update<PipelineState>(pipelineId, (s) => {
             if (!s) return s!;
