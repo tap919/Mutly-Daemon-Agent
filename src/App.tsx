@@ -15,6 +15,7 @@ import {
   UploadCloud,
   Cpu,
   ShieldAlert,
+  Play,
 } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import UltraPlan from "./components/UltraPlan";
@@ -26,8 +27,10 @@ import Sandbox from "./components/Sandbox";
 import Injector from "./components/Injector";
 import IdeIntegrations from "./components/IdeIntegrations";
 import CodeAuditor from "./components/CodeAuditor";
+import BuildPipeline from "./components/BuildPipeline";
 import LandingPage from "./components/LandingPage";
 import SourceImport from "./components/SourceImport";
+import SettingsPanel from "./components/Settings";
 import type { FullState } from "./types";
 import { mutlyFetch } from "./utils/api";
 
@@ -146,6 +149,18 @@ export default function App() {
               active={activeTab === "auditor"}
               onClick={() => setActiveTab("auditor")}
             />
+            <NavItem
+              icon={<Play className="w-4 h-4" />}
+              label="Build Pipeline"
+              active={activeTab === "build"}
+              onClick={() => setActiveTab("build")}
+            />
+            <NavItem
+              icon={<Settings className="w-4 h-4" />}
+              label="Settings"
+              active={activeTab === "settings"}
+              onClick={() => setActiveTab("settings")}
+            />
           </nav>
         </div>
 
@@ -220,6 +235,8 @@ export default function App() {
           {activeTab === "injector" && <Injector agentState={agentState} />}
           {activeTab === "integrations" && <IdeIntegrations agentState={agentState} />}
           {activeTab === "auditor" && <CodeAuditor agentState={agentState} />}
+          {activeTab === "build" && <BuildPipeline agentState={agentState} />}
+          {activeTab === "settings" && <SettingsPanel />}
         </div>
       </main>
     </div>
