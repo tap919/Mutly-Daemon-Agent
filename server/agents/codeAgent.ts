@@ -22,6 +22,7 @@ import { callVibeServeTool, isVibeServeEnabled } from "../tools/mcp/mcpVibeServe
 import { isStructuredBuildStep, type BuildStep } from "../buildPipeline/pipelineTypes.js";
 import { executeBuildStep, type StepContext } from "../buildPipeline/fileStepExecutor.js";
 import { p4_build, type BuildContext } from "../buildPipeline/p4_build.js";
+import { createAutoCommitHook } from "../buildPipeline/autoCommit.js";
 
 export class CodeAgent extends BaseAgent {
   readonly name = "code";
@@ -86,15 +87,24 @@ export class CodeAgent extends BaseAgent {
   /** Delegate to p4_build for the full build phase. */
   private async runPhase(ctx: AgentContext, startMs: number): Promise<AgentResult> {
     const state = ctx.pipelineState;
+    const autoCommit = createAutoCommitHook({
+      workspaceRoot: state.workspacePath ?? process.cwd(),
+      pipelineId: state.id,
+    });
     const buildCtx: BuildContext = {
       workspaceRoot: state.workspacePath ?? process.cwd(),
-      onStepApplied: (step, result) => {
+      onStepApplied: async (step, result) => {
         ctx.log("info", `[build] ${step.action} → ${result.filePath}`);
         ctx.messageBus.broadcast("info", "code", {
           event: "code_step_applied",
           stepId: step.id,
           filePath: result.filePath,
         });
+        // Auto-commit (best effort — never throws into the build)
+        const c = await autoCommit(step, result);
+        if (c.sha) {
+          ctx.log("info", `[build] committed ${c.sha.slice(0, 7)}: ${c.message}`);
+        }
       },
     };
     const result = await p4_build(state, buildCtx);
