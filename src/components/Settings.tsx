@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Save, RefreshCw, AlertTriangle, Settings2, Cpu, Terminal, FileJson } from "lucide-react";
 import { mutlyFetch } from "../utils/api";
 
@@ -6,11 +6,13 @@ interface SettingsData {
   config: {
     features: { main_agent_enabled: boolean; adaptive_routing: boolean; autonomous_pipelines: boolean; human_approvals: boolean; autonomy_kill_switch: boolean };
     agent: { mode: string; max_concurrent_sub_agents: number; memory_backend: string; soul_file: string; heartbeat_file: string; heartbeat_interval_seconds: number };
-    integrations: { vibeserve: { enabled: boolean; url: string }; reporank: { enabled: boolean; url: string }; google_ax: { enabled: boolean; endpoint: string; project: string } };
+    integrations: { vibeserve: { enabled: boolean; url: string; tool_timeout_ms?: number; max_retries?: number }; reporank: { enabled: boolean; url: string }; google_ax: { enabled: boolean; endpoint: string; project: string } };
     sub_agents: { token_budget: number; scope_boundary: string; audit_trail: boolean; timeout_ms: number };
+    pipeline: { drift_threshold: number; review_threshold: number; approval_policy: { require_for: string[] }; default_template: string };
   };
   env: Record<string, unknown>;
   soul: { name: string; role: string; mission: string } | null;
+  heartbeat: { last_seen: string; uptime_seconds: number; phase: string } | null;
   errors: string[];
   overrides: Record<string, boolean>;
 }
@@ -61,14 +63,17 @@ export default function Settings() {
   const [localConfig, setLocalConfig] = useState<SettingsData["config"] | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false); // used to pause polling during save
 
   const fetchSettings = useCallback(async () => {
+    // Don't clobber user edits while a save is in flight
+    if (savingRef.current) return;
     try {
       const res = await mutlyFetch("/api/settings");
       if (res.ok) {
         const json: SettingsData = await res.json();
         setData(json);
-        setLocalConfig(json.config);
+        setLocalConfig((prev) => prev ? prev : json.config);
         setOffline(false);
       } else {
         setOffline(true);
@@ -82,7 +87,11 @@ export default function Settings() {
 
   useEffect(() => {
     fetchSettings();
-    const interval = setInterval(fetchSettings, 5000);
+    const interval = setInterval(() => {
+      // Pause polling when tab is hidden to save resources
+      if (typeof document !== "undefined" && document.hidden) return;
+      fetchSettings();
+    }, 5000);
     return () => clearInterval(interval);
   }, [fetchSettings]);
 
@@ -101,6 +110,7 @@ export default function Settings() {
   const handleSave = async () => {
     if (!localConfig) return;
     setSaving(true);
+    savingRef.current = true;
     try {
       const res = await mutlyFetch("/api/settings/config", {
         method: "PUT",
@@ -110,13 +120,22 @@ export default function Settings() {
       if (res.ok) {
         setStatusMsg({ text: "Config saved", ok: true });
       } else {
-        const err = await res.text();
-        setStatusMsg({ text: err || "Failed to save config", ok: false });
+        let errText = "Failed to save config";
+        try {
+          const errBody = await res.json();
+          errText = errBody.error || errText;
+        } catch {
+          errText = (await res.text()) || errText;
+        }
+        setStatusMsg({ text: errText, ok: false });
       }
     } catch {
       setStatusMsg({ text: "Network error saving config", ok: false });
     } finally {
       setSaving(false);
+      savingRef.current = false;
+      // Force a refresh after save so the server truth reflects in the UI
+      setTimeout(() => fetchSettings(), 100);
       setTimeout(() => setStatusMsg(null), 3000);
     }
   };
@@ -132,7 +151,7 @@ export default function Settings() {
   const updateConfig = (path: string, value: unknown) => {
     setLocalConfig((prev) => {
       if (!prev) return prev;
-      const copy = JSON.parse(JSON.stringify(prev));
+      const copy = structuredClone(prev);
       const keys = path.split(".");
       let obj: unknown = copy;
       for (let i = 0; i < keys.length - 1; i++) {
