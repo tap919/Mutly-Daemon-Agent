@@ -17,6 +17,7 @@ import type { SpecBundle } from "../spec/specAssets.js";
 import type { ToolResult } from "../tools/types.js";
 import { getConfig } from "../config.js";
 import { litellmAdapter } from "./litellmAdapter.js";
+import { opencodeAdapter } from "./opencodeAdapter.js";
 
 export interface RoutingContext {
   daemon: AgentDaemon;
@@ -144,6 +145,18 @@ export class AgentRouter {
         modelProvider,
         criteriaMatched,
       };
+    }
+
+    // Check if OpenCode should be used instead of direct model call
+    const useOpencode = String(process.env.MUTLY_USE_OPENCODE || "") === "true";
+    if (useOpencode && opencodeAdapter.isAvailable && (
+      desc.includes("refactor") ||
+      desc.includes("implement") ||
+      desc.includes("multi-file") ||
+      opencodeAdapter.shouldUseOpenCode(ctx.stepDescription)
+    )) {
+      route.modelProvider = "opencode";
+      criteriaMatched = "opencode_route";
     }
 
     // Suppress unhealthy VibeServe tools

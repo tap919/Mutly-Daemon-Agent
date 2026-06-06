@@ -7,6 +7,7 @@ interface SettingsData {
     features: { main_agent_enabled: boolean; adaptive_routing: boolean; autonomous_pipelines: boolean; human_approvals: boolean; autonomy_kill_switch: boolean };
     agent: { mode: string; max_concurrent_sub_agents: number; memory_backend: string; soul_file: string; heartbeat_file: string; heartbeat_interval_seconds: number };
     integrations: { vibeserve: { enabled: boolean; url: string; tool_timeout_ms?: number; max_retries?: number }; reporank: { enabled: boolean; url: string }; google_ax: { enabled: boolean; endpoint: string; project: string } };
+    model_router: { enabled: boolean; default_model: string; fallback_model: string; use_litellm: boolean; use_opencode: boolean };
     sub_agents: { token_budget: number; scope_boundary: string; audit_trail: boolean; timeout_ms: number };
     pipeline: { drift_threshold: number; review_threshold: number; approval_policy: { require_for: string[] }; default_template: string };
   };
@@ -378,13 +379,78 @@ export default function Settings() {
             />
           </div>
 
-          <InputRow label="Default Model" badge="env">
+          <div className="flex items-center justify-between py-3 px-4 bg-zinc-900/20 rounded-lg border border-zinc-800/60">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-200 font-medium">Model Router</span>
+              <Badge variant="runtime">RUNTIME</Badge>
+            </div>
+            <Toggle
+              checked={config.model_router?.enabled ?? true}
+              onChange={(v) => updateConfig("model_router.enabled", v)}
+            />
+          </div>
+
+          {config.model_router?.enabled !== false && (
+            <>
+              <InputRow label="Use LiteLLM" badge="runtime">
+                <Toggle
+                  checked={config.model_router?.use_litellm ?? true}
+                  onChange={(v) => updateConfig("model_router.use_litellm", v)}
+                />
+              </InputRow>
+
+              <InputRow label="Use OpenCode" badge="runtime">
+                <Toggle
+                  checked={config.model_router?.use_opencode ?? false}
+                  onChange={(v) => updateConfig("model_router.use_opencode", v)}
+                />
+              </InputRow>
+
+              <InputRow label="Default Model" badge="runtime">
+                <select
+                  value={config.model_router?.default_model || "gemini-2.5-flash"}
+                  onChange={(e) => updateConfig("model_router.default_model", e.target.value)}
+                  className="bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs font-mono rounded px-2 py-1 outline-none focus:border-zinc-500"
+                >
+                  <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                  <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                  <option value="gpt-5">gpt-5</option>
+                  <option value="gpt-5-high">gpt-5-high</option>
+                  <option value="claude-haiku-4-20250514">claude-haiku-4</option>
+                  <option value="claude-sonnet-4-20250514">claude-sonnet-4</option>
+                  <option value="claude-opus-4-20250514">claude-opus-4</option>
+                  <option value="deepseek-chat">deepseek-chat</option>
+                  <option value="grok-3">grok-3</option>
+                </select>
+              </InputRow>
+
+              <InputRow label="Fallback Model" badge="runtime">
+                <select
+                  value={config.model_router?.fallback_model || "gemini-2.5-flash"}
+                  onChange={(e) => updateConfig("model_router.fallback_model", e.target.value)}
+                  className="bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs font-mono rounded px-2 py-1 outline-none focus:border-zinc-500"
+                >
+                  <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                  <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                  <option value="gpt-5">gpt-5</option>
+                  <option value="gpt-5-high">gpt-5-high</option>
+                  <option value="claude-haiku-4-20250514">claude-haiku-4</option>
+                  <option value="claude-sonnet-4-20250514">claude-sonnet-4</option>
+                  <option value="claude-opus-4-20250514">claude-opus-4</option>
+                  <option value="deepseek-chat">deepseek-chat</option>
+                  <option value="grok-3">grok-3</option>
+                </select>
+              </InputRow>
+            </>
+          )}
+
+          <InputRow label="Default Model (env)" badge="env">
             <span className="text-xs font-mono text-zinc-300">
               {(env as Record<string, string>).MUTLY_DEFAULT_MODEL || "Not set"}
             </span>
           </InputRow>
 
-          <InputRow label="Fallback Model" badge="env">
+          <InputRow label="Fallback Model (env)" badge="env">
             <span className="text-xs font-mono text-zinc-300">
               {(env as Record<string, string>).MUTLY_FALLBACK_MODEL || "Not set"}
             </span>

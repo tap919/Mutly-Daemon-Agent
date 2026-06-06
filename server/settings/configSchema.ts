@@ -59,10 +59,19 @@ export const SubAgentConfigSchema = z.object({
   timeout_ms: z.number().int().min(5000).max(600000).default(120000),
 });
 
+export const ModelRouterConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  default_model: z.string().default("gemini-2.5-flash"),
+  fallback_model: z.string().default("gemini-2.5-flash"),
+  use_litellm: z.boolean().default(true),
+  use_opencode: z.boolean().default(false),
+});
+
 export const MutlyConfigSchema = z.object({
   features: FeatureFlagsSchema.default(() => FeatureFlagsSchema.parse({})),
   agent: AgentConfigSchema.default(() => AgentConfigSchema.parse({})),
   integrations: IntegrationsConfigSchema.default(() => IntegrationsConfigSchema.parse({})),
+  model_router: ModelRouterConfigSchema.default(() => ModelRouterConfigSchema.parse({})),
   pipeline: PipelineConfigSchema.default(() => PipelineConfigSchema.parse({})),
   sub_agents: SubAgentConfigSchema.default(() => SubAgentConfigSchema.parse({})),
 });

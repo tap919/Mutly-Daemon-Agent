@@ -128,6 +128,17 @@ const envSchema = z.object({
   // --- Model configuration (S5: model-agnostic) ---
   MUTLY_DEFAULT_MODEL: z.string().optional().default("gemini-2.5-flash"),
   MUTLY_FALLBACK_MODEL: z.string().optional().default("gemini-2.5-flash"),
+  MUTLY_USE_LITELLM: z
+    .string()
+    .optional()
+    .default("true")
+    .transform((v) => v !== "false"),
+  MUTLY_USE_OPENCODE: z
+    .string()
+    .optional()
+    .default("false")
+    .transform((v) => v === "true"),
+  GEMINI_API_KEY: z.string().optional().default(""),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
