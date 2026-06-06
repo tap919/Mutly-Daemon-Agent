@@ -29,6 +29,7 @@ import { resolvePathInWorkspace } from "./server/lib/workspacePaths.js";
 import { validateSandboxCommand } from "./server/sandboxEngine.js";
 import { pipelineRunner } from "./server/buildPipeline/pipelineRunner.js";
 import { loadDefaultSkills, listAvailableSkills } from "./server/skills/skillLoader.js";
+import { createSettingsRouter } from "./server/settings/routes.js";
 
 // Load skills at startup
 loadDefaultSkills();
@@ -42,6 +43,9 @@ async function startServer() {
   const MUTLY_API_KEY = resolveMutlyApiKey(agentDaemon.getSecureKey());
 
   app.use(express.json({ limit: "2mb" }));
+
+  // Settings control plane — runtime config, toggles, env
+  app.use("/api", createSettingsRouter());
 
   // Minimal public health — no sensitive operational detail
   app.get("/health", async (_req, res) => {
