@@ -1,6 +1,6 @@
 /** Unified Build Pipeline type definitions */
 
-export type PhaseId = "ingest" | "audit" | "plan" | "build" | "review" | "iterate" | "ready";
+export type PhaseId = "ingest" | "audit" | "plan" | "build" | "verify" | "review" | "iterate" | "ready" | "lint_config";
 export type PhaseStatus = "pending" | "running" | "passed" | "failed" | "skipped";
 export type PipelineStatus = "idle" | "running" | "paused" | "completed" | "failed";
 
@@ -131,7 +131,7 @@ export interface PipelineState {
 
 export function createPipelineState(workspaceId?: string): PipelineState {
   const now = Date.now();
-  const allPhases: PhaseId[] = ["ingest", "audit", "plan", "build", "review", "iterate", "ready"];
+  const allPhases: PhaseId[] = ["ingest", "audit", "plan", "build", "verify", "review", "iterate", "ready"];
   const phases = {} as Record<PhaseId, PhaseResult>;
   for (const id of allPhases) {
     phases[id] = { id, status: "pending" };

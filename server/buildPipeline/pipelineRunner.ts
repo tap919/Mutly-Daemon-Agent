@@ -26,6 +26,7 @@ const PHASE_TO_AGENT: Record<string, string> = {
   audit: "audit",
   plan: "plan",
   build: "code",
+  verify: "code",
   review: "review",
   iterate: "iterate",
   ready: "deploy",
@@ -216,7 +217,7 @@ export class PipelineRunner {
 
   /** Run all phases in sequence, with ITERATE loop */
   async runAll(pipelineId: string): Promise<PipelineState> {
-    const order: PhaseId[] = ["ingest", "audit", "plan", "build", "review"];
+    const order: PhaseId[] = ["ingest", "audit", "plan", "build", "verify", "review"];
     const maxIterations = parseInt(process.env.MUTLY_MAX_ITERATIONS || "5", 10);
 
     for (const phaseId of order) {
