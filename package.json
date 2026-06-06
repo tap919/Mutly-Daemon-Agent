@@ -9,7 +9,7 @@
     "scripts": {
         "dev": "tsx server.ts",
         "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && npm run build:cli",
-        "build:cli": "esbuild bin/mutly.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=bin/mutly.cjs && chmod +x bin/mutly.cjs",
+        "build:cli": "esbuild bin/mutly.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=bin/mutly.cjs",
         "start": "node dist/server.cjs",
         "preview": "vite preview",
         "clean": "node --input-type=module -e \"import fs from 'fs'; for (const p of ['dist','dist-server']) fs.rmSync(p,{recursive:true,force:true});\"",
