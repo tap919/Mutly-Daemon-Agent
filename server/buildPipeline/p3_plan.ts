@@ -176,14 +176,120 @@ export async function p3_plan(state: PipelineState): Promise<PhaseResult> {
         stepLog.push("Create .prettierrc");
       }
     }
-  }
 
-  const plan: ExecutionPlan = {
+    // ---- New generators for higher conversion ----
+
+    // 3. Split large files (over 300 lines)
+    if (iLower.includes("large file") || iLower.includes("split") || iLower.includes("refactor")) {
+      try {
+        const walkLarge = (dir: string) => {
+          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "dist") continue;
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) walkLarge(full);
+            else if (/\.(ts|tsx|js|jsx)$/.test(e.name)) {
+              const content = fs.readFileSync(full, "utf-8");
+              const lines = content.split("\n").length;
+              if (lines > 300) {
+                const relPath = full.replace(workspaceRoot, "").replace(/^\//, "");
+                steps.push({
+                  id: `split_${steps.length + 1}`,
+                  action: "apply_diff",
+                  filePath: relPath,
+                  findContent: content.split("\n").slice(0, 3).join("\n"),
+                  replaceContent: "// REVIEW: This file has " + lines + " lines. Consider splitting into smaller modules.\n" + content.split("\n").slice(0, 3).join("\n"),
+                  risk: "Low",
+                });
+                stepLog.push(`Flag large file ${relPath} (${lines} lines)`);
+              }
+            }
+          }
+        };
+        walkLarge(workspaceRoot);
+      } catch {}
+    }
+
+    // 4. TypeScript strict mode
+    if (iLower.includes("typescript") || iLower.includes("strict") || iLower.includes("tsconfig")) {
+      const tsconfigPath = path.join(workspaceRoot, "tsconfig.json");
+      if (fs.existsSync(tsconfigPath)) {
+        try {
+          const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf-8"));
+          if (!tsconfig.compilerOptions?.strict) {
+            steps.push({
+              id: `strict_ts_${steps.length + 1}`,
+              action: "apply_diff",
+              filePath: "tsconfig.json",
+              findContent: '"compilerOptions": {',
+              replaceContent: '"compilerOptions": {\n    "strict": true,',
+              risk: "Medium",
+            });
+            stepLog.push("Enable strict mode in tsconfig.json");
+          }
+        } catch {}
+      }
+    }
+
+    // 5. README.md
+    if (iLower.includes("readme") || iLower.includes("documentation") || iLower.includes("docs")) {
+      const readmePath = path.join(workspaceRoot, "README.md");
+      if (!fs.existsSync(readmePath)) {
+        let projectName = "Mutly Project";
+        try {
+          const pkg = JSON.parse(fs.readFileSync(path.join(workspaceRoot, "package.json"), "utf-8"));
+          if (pkg.name) projectName = pkg.name;
+        } catch {}
+        steps.push({
+          id: `readme_${steps.length + 1}`,
+          action: "create_file",
+          filePath: "README.md",
+          content: `# ${projectName}\n\n## Overview\n\nAutomated project managed by Mutly Daemon Agent.\n\n## Getting Started\n\n1. Install dependencies: \`npm install\`\n2. Run tests: \`npm test\`\n3. Start development: \`npm run dev\`\n\n## License\n\nProprietary.\n`,
+          risk: "Low",
+        });
+        stepLog.push("Create README.md");
+      }
+    }
+
+    // 6. .gitignore hygiene
+    if (iLower.includes("gitignore") || iLower.includes("git") || iLower.includes("version control")) {
+      const gitignorePath = path.join(workspaceRoot, ".gitignore");
+      let existing = "";
+      try { existing = fs.readFileSync(gitignorePath, "utf-8"); } catch {}
+      const missing: string[] = [];
+      const standard = ["node_modules/", "dist/", ".env", "*.log"];
+      for (const entry of standard) {
+        if (!existing.includes(entry)) missing.push(entry);
+      }
+      if (missing.length > 0) {
+        if (existing) {
+          steps.push({
+            id: `gitignore_${steps.length + 1}`,
+            action: "apply_diff",
+            filePath: ".gitignore",
+            findContent: existing.trim().split("\n").slice(-1)[0] || "node_modules/",
+            replaceContent: (existing.trim().split("\n").slice(-1)[0] || "node_modules/") + "\n" + missing.join("\n"),
+            risk: "Low",
+          });
+        } else {
+          steps.push({
+            id: `gitignore_${steps.length + 1}`,
+            action: "create_file",
+            filePath: ".gitignore",
+            content: standard.join("\n") + "\n",
+            risk: "Low",
+          });
+        }
+        stepLog.push("Update .gitignore with standard entries");
+      }
+    }
+
+  }
+  const plan = {
     planId: `plan_${Date.now()}`,
     success: true,
     message: `Plan: ${steps.length} actionable steps from ${textIssues.length} issues (score: ${score}/100)`,
     log: stepLog,
-    tree: steps,
+    tree: steps as any[],
   };
 
   // Try augment with VibeServe
