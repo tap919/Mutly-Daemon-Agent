@@ -58,4 +58,50 @@ describe("parseSoulContent", () => {
     const result = parseSoulContent(content);
     expect(result.error).toBeDefined();
   });
+
+  it("parses nested objects with js-yaml (fixes custom parser limitation)", () => {
+    const content = [
+      "---",
+      "name: Agent",
+      "role: Tester",
+      "mission: Test nested YAML",
+      "tone: technical",
+      "defaults:",
+      "  auto_commit: false",
+      "  ask_before_delete: false",
+      "  review_threshold: 0.8",
+      "---",
+    ].join("\n");
+    const result = parseSoulContent(content);
+    expect(result.config).not.toBeNull();
+    // Previously the custom parser flattened this to top-level keys,
+    // making `result.config.defaults` fall back to Zod defaults.
+    // js-yaml correctly nests it:
+    expect(result.config!.defaults.auto_commit).toBe(false);
+    expect(result.config!.defaults.ask_before_delete).toBe(false);
+    expect(result.config!.defaults.review_threshold).toBe(0.8);
+  });
+
+  it("strips quotes from YAML values with js-yaml", () => {
+    const content = [
+      "---",
+      "name: MyAgent",
+      "role: Developer",
+      "version: '1.0.0'",
+      "mission: Test versions",
+      "tone: precise",
+      "---",
+    ].join("\n");
+    const result = parseSoulContent(content);
+    expect(result.config).not.toBeNull();
+    // Previously the custom parser kept the literal quotes: "'1.0.0'"
+    // js-yaml correctly strips them:
+    expect(result.config!.version).toBe("1.0.0");
+  });
+
+  it("reports YAML parse errors from js-yaml", () => {
+    const content = "---\nname: Agent\nrole: Tester\nmission: Test\ninvalid_yaml: [unclosed\n---";
+    const result = parseSoulContent(content);
+    expect(result.error).toContain("YAML parse error");
+  });
 });

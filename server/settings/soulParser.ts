@@ -1,5 +1,13 @@
+/**
+ * Sprint D.10 — mutly.soul.md frontmatter parser.
+ *
+ * Parses YAML frontmatter from the agent identity file using js-yaml
+ * (replacing the custom parser that couldn't handle nested objects or
+ * quoted strings). Falls back gracefully when no frontmatter is present.
+ */
 import { z } from "zod";
 import fs from "fs";
+import yaml from "js-yaml";
 
 const DefaultsSchema = z.object({
   auto_commit: z.boolean().default(true),
@@ -17,7 +25,7 @@ export const SoulSchema = z.object({
   allowed_tools: z.array(z.string()).default([]),
   denied_tools: z.array(z.string()).default([]),
   defaults: DefaultsSchema.default(() => DefaultsSchema.parse({})),
-}).passthrough();
+}).passthrough(); // allow unknown keys for user extension
 
 export type SoulConfig = z.infer<typeof SoulSchema>;
 
@@ -44,6 +52,10 @@ export function parseSoulFile(filePath: string): SoulParseResult {
   }
 }
 
+/**
+ * Parse YAML frontmatter from a raw string.
+ * Uses js-yaml for proper nested object and quoted string support.
+ */
 export function parseSoulContent(content: string): SoulParseResult {
   const trimmed = content.trimStart();
   if (!trimmed.startsWith("---")) {
@@ -58,7 +70,22 @@ export function parseSoulContent(content: string): SoulParseResult {
   const yamlBlock = trimmed.slice(3, endIndex).trim();
   const body = trimmed.slice(endIndex + 3).trim();
 
-  const parsed = parseSimpleYaml(yamlBlock);
+  let parsed: Record<string, unknown>;
+  try {
+    const loaded = yaml.load(yamlBlock);
+    if (loaded && typeof loaded === "object") {
+      parsed = loaded as Record<string, unknown>;
+    } else {
+      return { config: null, body, error: "Frontmatter did not parse to an object" };
+    }
+  } catch (e) {
+    return {
+      config: null,
+      body,
+      error: `YAML parse error: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+
   const result = SoulSchema.safeParse(parsed);
   if (!result.success) {
     return {
@@ -68,46 +95,4 @@ export function parseSoulContent(content: string): SoulParseResult {
     };
   }
   return { config: result.data, body };
-}
-
-/** Minimal YAML parser for key: value and key:\n  - item formats */
-function parseSimpleYaml(yaml: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  let currentKey: string | null = null;
-  let currentArray: string[] = [];
-
-  for (const line of yaml.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    if (trimmed.startsWith("- ")) {
-      if (currentKey) {
-        currentArray.push(trimmed.slice(2).trim());
-      }
-    } else {
-      if (currentKey && currentArray.length > 0) {
-        result[currentKey] = [...currentArray];
-        currentArray = [];
-      }
-      const colonIdx = trimmed.indexOf(":");
-      if (colonIdx > 0) {
-        currentKey = trimmed.slice(0, colonIdx).trim();
-        const value = trimmed.slice(colonIdx + 1).trim();
-        if (value === "") {
-          // Start of a list — don't set yet
-        } else if (value === "true") {
-          result[currentKey] = true;
-        } else if (value === "false") {
-          result[currentKey] = false;
-        } else if (/^\d+\.?\d*$/.test(value)) {
-          result[currentKey] = Number(value);
-        } else {
-          result[currentKey] = value;
-        }
-      }
-    }
-  }
-  if (currentKey && currentArray.length > 0) {
-    result[currentKey] = [...currentArray];
-  }
-  return result;
 }
