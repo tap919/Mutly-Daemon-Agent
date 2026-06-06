@@ -86,12 +86,12 @@ export default function Settings() {
     return () => clearInterval(interval);
   }, [fetchSettings]);
 
-  const handleToggle = async (key: string) => {
+  const handleToggle = async (key: string, newValue: boolean) => {
     try {
       await mutlyFetch("/api/settings/toggle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
+        body: JSON.stringify({ key, value: newValue }),
       });
     } catch {
       // ignore network errors on toggle; state syncs on next poll
@@ -230,9 +230,9 @@ export default function Settings() {
             </div>
             <Toggle
               checked={config.features.main_agent_enabled}
-              onChange={() => {
-                handleToggle("main_agent_enabled");
-                updateConfig("features.main_agent_enabled", !config.features.main_agent_enabled);
+              onChange={(v) => {
+                handleToggle("main_agent_enabled", v);
+                updateConfig("features.main_agent_enabled", v);
               }}
             />
           </div>
@@ -317,9 +317,9 @@ export default function Settings() {
           <InputRow label="Adaptive Routing" badge="runtime">
             <Toggle
               checked={config.features.adaptive_routing}
-              onChange={() => {
-                handleToggle("adaptive_routing");
-                updateConfig("features.adaptive_routing", !config.features.adaptive_routing);
+              onChange={(v) => {
+                handleToggle("adaptive_routing", v);
+                updateConfig("features.adaptive_routing", v);
               }}
             />
           </InputRow>
@@ -327,9 +327,9 @@ export default function Settings() {
           <InputRow label="Autonomous Pipelines" badge="runtime">
             <Toggle
               checked={config.features.autonomous_pipelines}
-              onChange={() => {
-                handleToggle("autonomous_pipelines");
-                updateConfig("features.autonomous_pipelines", !config.features.autonomous_pipelines);
+              onChange={(v) => {
+                handleToggle("autonomous_pipelines", v);
+                updateConfig("features.autonomous_pipelines", v);
               }}
             />
           </InputRow>
@@ -337,9 +337,9 @@ export default function Settings() {
           <InputRow label="Human Approvals" badge="runtime">
             <Toggle
               checked={config.features.human_approvals}
-              onChange={() => {
-                handleToggle("human_approvals");
-                updateConfig("features.human_approvals", !config.features.human_approvals);
+              onChange={(v) => {
+                handleToggle("human_approvals", v);
+                updateConfig("features.human_approvals", v);
               }}
             />
           </InputRow>
@@ -352,22 +352,22 @@ export default function Settings() {
             </div>
             <Toggle
               checked={config.features.autonomy_kill_switch}
-              onChange={() => {
-                handleToggle("autonomy_kill_switch");
-                updateConfig("features.autonomy_kill_switch", !config.features.autonomy_kill_switch);
+              onChange={(v) => {
+                handleToggle("autonomy_kill_switch", v);
+                updateConfig("features.autonomy_kill_switch", v);
               }}
             />
           </div>
 
           <InputRow label="Default Model" badge="env">
             <span className="text-xs font-mono text-zinc-300">
-              {(env as Record<string, string>).DEFAULT_MODEL || "Not set"}
+              {(env as Record<string, string>).MUTLY_DEFAULT_MODEL || "Not set"}
             </span>
           </InputRow>
 
           <InputRow label="Fallback Model" badge="env">
             <span className="text-xs font-mono text-zinc-300">
-              {(env as Record<string, string>).FALLBACK_MODEL || "Not set"}
+              {(env as Record<string, string>).MUTLY_FALLBACK_MODEL || "Not set"}
             </span>
           </InputRow>
         </div>
