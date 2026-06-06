@@ -54,7 +54,7 @@ async function startServer() {
     res.json({
       port: PORT,
       vibeserveEnabled: isVibeServeEnabled(),
-      devApiKeyHint: process.env.MUTLY_API_KEY ? null : "dev_mutly_secure_master_key",
+      devApiKeyHint: process.env.MUTLY_API_KEY || "dev_mutly_secure_master_key",
       nodeEnv: process.env.NODE_ENV || "development",
     });
   });
@@ -742,6 +742,9 @@ function applyFilePatch(filePath: string, findContent: string, replaceContent: s
     });
 
   // ── Build Pipeline Routes ────────────────────────────────────
+  const { createProvenanceRouter } = await import("./server/pipeline/provenanceRouter.js");
+  app.use("/api", createProvenanceRouter(pipelineRunner));
+
   app.post("/api/pipeline/start", async (req, res) => {
     try {
       const { source, repoUrl, files } = req.body || {};
@@ -866,7 +869,7 @@ function applyFilePatch(filePath: string, findContent: string, replaceContent: s
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: { port: 0 } },
       appType: "spa",
     });
     app.use(vite.middlewares);
