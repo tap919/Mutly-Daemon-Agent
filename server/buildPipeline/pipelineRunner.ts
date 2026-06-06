@@ -19,6 +19,9 @@ import { AgentMessageBus } from "../agents/agentMessageBus.js";
 import { AgentCoordinator, createDefaultCoordinator } from "../agents/agentRegistry.js";
 import { AgentTask, AgentResult, AgentContext } from "../agents/agentBase.js";
 import { callSkill } from "../skills/skillLoader.js";
+import { withModelFallback, generateRemediation } from "./errorRecovery.js";
+import { globalProgressEmitter } from "./progressEmitter.js";
+import { globalCache } from "./contentHashCache.js";
 
 /** Map of phase IDs to their responsible agents */
 const PHASE_TO_AGENT: Record<string, string> = {
@@ -37,6 +40,7 @@ export class PipelineRunner {
   private budgetStore = new WorkflowBudgetStore();
   private bus: AgentMessageBus;
   private coordinator: AgentCoordinator;
+  private progressEmitter = globalProgressEmitter;
 
   constructor() {
     this.bus = new AgentMessageBus();
@@ -98,6 +102,9 @@ export class PipelineRunner {
       };
     });
 
+    // Emit progress start event
+    this.progressEmitter.startPhase(phaseId as any);
+
     const state = await this.getState(pipelineId);
     if (!state) throw new Error(`Pipeline ${pipelineId} not found`);
 
@@ -144,9 +151,32 @@ export class PipelineRunner {
       log: (level, msg) => console[level === "error" ? "error" : "log"](`[${agentName}] ${msg}`),
     };
 
+    // Content-hash cache: skip re-auditing unchanged files
+    if (phaseId === "audit" && state.workspacePath) {
+      const dirHash = globalCache.hashDirectory(state.workspacePath);
+      const cached = globalCache.get(`audit:${pipelineId}`, dirHash);
+      if (!cached.fresh && cached.result) {
+        this.progressEmitter.completePhase("audit" as any, { issuesFound: (cached.result as any)?.issues?.length });
+        return cached.result as PhaseResult;
+      }
+    }
+
     try {
-      // Dispatch through the coordinator
-      const result = await this.coordinator.dispatch(task, state, previousResults);
+      // Dispatch through the coordinator with model fallback
+      this.progressEmitter.updatePhase(phaseId as any, 0.5, `Dispatching to ${agentName}`);
+      const result = await withModelFallback(
+        async (model) => {
+          const modelTask: AgentTask = { ...task, input: { ...task.input, _model: model } };
+          return await this.coordinator.dispatch(modelTask, state, previousResults);
+        },
+        {
+          task: phaseId,
+          onRetry: (attempt, model, error) => {
+            const remediation = generateRemediation(error, phaseId);
+            this.progressEmitter.emitError(phaseId as any, error.message, remediation, attempt);
+          },
+        }
+      );
 
       if (!result.success) {
         await this.markPhaseFailed(pipelineId, phaseId, result.error || "Unknown error");
@@ -187,6 +217,18 @@ export class PipelineRunner {
         return updated;
       });
 
+      // Emit phase completion
+      this.progressEmitter.completePhase(phaseId as any, {
+        filesProcessed: (phaseOutput as any)?.fileCount,
+        issuesFound: (phaseOutput as any)?.issues?.length,
+      });
+
+      // Cache audit result
+      if (phaseId === "audit" && state.workspacePath) {
+        const dirHash = globalCache.hashDirectory(state.workspacePath);
+        globalCache.set(`audit:${pipelineId}`, dirHash, { id: phaseId, status: "passed", output: phaseOutput, score, completedAt: Date.now() });
+      }
+
       return {
         id: phaseId,
         status: "passed",
@@ -195,7 +237,8 @@ export class PipelineRunner {
         completedAt: Date.now(),
       };
     } catch (err: any) {
-      // Error already recorded by markPhaseFailed or was thrown by coordinator
+      const remediation = generateRemediation(err, phaseId);
+      this.progressEmitter.emitError(phaseId as any, err.message || String(err), remediation);
       throw err;
     }
   }
@@ -276,6 +319,7 @@ export class PipelineRunner {
       }
     }
 
+    this.progressEmitter.complete();
     return (await this.getState(pipelineId))!;
   }
 
