@@ -83,7 +83,7 @@ export function buildPhaseDrift(opts: {
   estimatedSteps: number;
   actual: { files: number; bytes: number; steps: number; succeeded: number };
 }): DriftSample[] {
-  return [
+  const samples: DriftSample[] = [
     {
       phase: "build.files",
       estimated: opts.estimatedFiles,
@@ -91,19 +91,23 @@ export function buildPhaseDrift(opts: {
       unit: "files",
       ts: Date.now(),
     },
-    {
+  ];
+  // Bytes only when a meaningful estimate was given (no false drift from fallbacks).
+  if (opts.estimatedBytes > 0) {
+    samples.push({
       phase: "build.bytes",
       estimated: opts.estimatedBytes,
       actual: opts.actual.bytes,
       unit: "bytes",
       ts: Date.now(),
-    },
-    {
-      phase: "build.steps",
-      estimated: opts.estimatedSteps,
-      actual: opts.actual.succeeded,
-      unit: "steps",
-      ts: Date.now(),
-    },
-  ];
+    });
+  }
+  samples.push({
+    phase: "build.steps",
+    estimated: opts.estimatedSteps,
+    actual: opts.actual.succeeded,
+    unit: "steps",
+    ts: Date.now(),
+  });
+  return samples;
 }

@@ -77,12 +77,19 @@ describe("DriftTracker — aggregation", () => {
 });
 
 describe("buildPhaseDrift — helper", () => {
-  it("produces three samples (files, bytes, steps)", () => {
-    const samples = buildPhaseDrift({
+  it("includes bytes sample only when estimatedBytes > 0", () => {
+    const withBytes = buildPhaseDrift({
       estimatedFiles: 5, estimatedBytes: 1000, estimatedSteps: 10,
       actual: { files: 5, bytes: 1000, steps: 10, succeeded: 10 },
     });
-    expect(samples.length).toBe(3);
-    expect(samples.map(s => s.phase)).toEqual(["build.files", "build.bytes", "build.steps"]);
+    expect(withBytes.length).toBe(3);
+    expect(withBytes.map(s => s.phase)).toEqual(["build.files", "build.bytes", "build.steps"]);
+
+    const withoutBytes = buildPhaseDrift({
+      estimatedFiles: 5, estimatedBytes: 0, estimatedSteps: 10,
+      actual: { files: 5, bytes: 1000, steps: 10, succeeded: 10 },
+    });
+    expect(withoutBytes.length).toBe(2);
+    expect(withoutBytes.map(s => s.phase)).toEqual(["build.files", "build.steps"]);
   });
 });
