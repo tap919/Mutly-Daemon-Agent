@@ -6,12 +6,14 @@ import {
   Layers,
 } from "lucide-react";
 import type { FullState } from "../types";
+import LoadingSkeleton from "./LoadingSkeleton";
 
 export default function Injector({
   agentState,
 }: {
   agentState: FullState | null;
 }) {
+  if (!agentState) return <LoadingSkeleton variant="card" count={3} />;
   const totalAnchored = agentState?.status.injector.totalAnchored || 0;
 
   return (

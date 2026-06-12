@@ -1,28 +1,39 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { FileVerifier, SandboxCommandExecutor } from './agent/fileVerifier.js';
 import { randomUUID } from "crypto";
+import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
 import ts from "typescript";
 import type { LogEntry, MicroChange, ExecutionPlan, AgentStatus, RepositoryAnalysis } from "../src/types.js";
 import { cosineSimilarity } from "./vectorEngine.js";
 import type { EmbeddingChunk, FileEmbeddingMeta } from "./vectorEngine.js";
-import { clearFolder, copyFolder, executeIsolatedCommand } from "./sandboxEngine.js";
+import { clearFolder, copyFolder, executeIsolatedCommand, validateSandboxCommand } from "./sandboxEngine.js";
 import { ToolRegistry } from "./tools/toolRegistry.js";
 import { nativeTools } from "./tools/native/index.js";
 import { vibeserveTools, vsMemoryGetTool, vsMemoryStoreTool, vsSchemaValidateTool } from "./tools/mcp/vibeserveTools.js";
-import { vsPlanReviewTool, vsGenerateArtifactTool, vsValidateArtifactTool } from "./tools/mcp/vibeservePlanningTools.js";
+import { vibeservePlanningTools } from "./tools/mcp/vibeservePlanningTools.js";
 import { augmentPlan, generateArtifact, getAugmentationConfig, type AugmentationResult } from "./planning/planAugmenter.js";
 import type { ToolContext } from "./tools/types.js";
-import { ReporankAuditService } from "./audit/reporankAuditService.ts";
+import { ReporankAuditService } from "./audit/reporankAuditService.js";
+import { logger } from "./lib/logger.js";
+import { getConfig } from "./config.js";
+import { PodmanSandbox } from "./execution/podmanSandbox.js";
+import { EnvSecretManager } from "./lib/secretsManager.js";
+import { withRecovery, CircuitBreakerFactory } from "./lib/errors/index.js";
+import type { ClassifiedError } from "./lib/errors/index.js";
+import type { SandboxCommandOutput } from "./schemas/agentContracts.js";
+import { LOG_TYPE, STATUS } from "./lib/constants.js";
+import { createProvider } from "./lib/llm/createProvider.js";
+import type { LLMProvider } from "./lib/llm/LLMProvider.js";
 
-const dbPath = path.resolve(process.cwd(), "db.json");
-const specFilePath = path.resolve(process.cwd(), "SPEC.md");
-const claudeFilePath = path.resolve(process.cwd(), "CLAUDE.md");
+function resolveDbPath(): string { return path.resolve(process.cwd(), "db.json"); }
+function resolveSpecFilePath(): string { return path.resolve(process.cwd(), "SPEC.md"); }
+function resolveClaudeFilePath(): string { return path.resolve(process.cwd(), "CLAUDE.md"); }
 
 export function scanWorkspace(dir: string) {
   let filesCount = 0;
   let linesOfCode = 0;
-  let errorCount = 0;
+  let suspiciousPatterns = 0;
   
   function walk(currentDir: string) {
     if (!fs.existsSync(currentDir)) return;
@@ -46,7 +57,7 @@ export function scanWorkspace(dir: string) {
             
             const contentLower = content.toLowerCase();
             if (contentLower.includes("console.log") || contentLower.includes(": any") || contentLower.includes("todo") || contentLower.includes("dummy")) {
-              errorCount++;
+              suspiciousPatterns++;
             }
           }
         }
@@ -57,7 +68,7 @@ export function scanWorkspace(dir: string) {
   }
   
   walk(dir);
-  return { filesCount, linesOfCode, errorCount };
+  return { filesCount, linesOfCode, suspiciousPatterns };
 }
 
 export interface SandboxLogEntry {
@@ -82,8 +93,18 @@ export class AgentDaemon {
   public sandboxStatus = "idle";
   public sandboxActiveCommand = "";
   public reporankAuditService: ReporankAuditService;
+  public fileVerifier: FileVerifier;
+  public podmanSandbox: PodmanSandbox;
+  private readonly containerCircuitBreaker = CircuitBreakerFactory.forContainer();
+  private readonly llmCircuitBreaker = CircuitBreakerFactory.forLLM();
+  
+  // Workflow integration properties
+  public activeWorkflowId: string | null = null;
+  private activeWorkspaceId: string | null = null;
   
   private lastModifiedMap = new Map<string, number>();
+  private _pendingSave: boolean = false;
+  private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   public state = {
     memory: {
@@ -106,37 +127,101 @@ export class AgentDaemon {
 
   private interval: NodeJS.Timeout | null = null;
 
-  private getAi(): GoogleGenAI {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error("GEMINI_API_KEY environment variable is not defined.");
-    }
-    return new GoogleGenAI({ apiKey: key });
+  private llmProvider: LLMProvider;
+
+  public getLlmProviderName(): string {
+    return this.llmProvider.name;
+  }
+
+  /**
+   * Execute an LLM call with circuit breaker and recovery handling.
+   * Uses the class-level llmCircuitBreaker and withRecovery.
+   */
+  private async withLlmRecovery<T>(
+    operation: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    return withRecovery<T>({
+      operation,
+      primaryFn: fn,
+      circuitBreaker: this.llmCircuitBreaker,
+      maxRetries: 3,
+      baseDelayMs: 1000,
+      maxDelayMs: 30000,
+      classifyError: (err) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        // Check for fatal auth errors
+        if (
+          error.message.includes("api key") ||
+          error.message.includes("authentication failed") ||
+          error.message.includes("unauthorized") ||
+          error.message.includes("invalid credentials")
+        ) {
+          return { class: "FATAL", origin: "llm", originalError: error };
+        }
+        // Check for transient/rate limit errors
+        if (
+          error.message.includes("rate limit") ||
+          error.message.includes("429") ||
+          error.message.includes("quota exceeded") ||
+          error.message.includes("overloaded")
+        ) {
+          return { class: "TRANSIENT", origin: "llm", originalError: error };
+        }
+        // Default: RECOVERABLE LLM error
+        return { class: "RECOVERABLE", origin: "llm", originalError: error };
+      },
+    });
   }
 
   constructor() {
+    this.llmProvider = createProvider();
     this.spec = `# App Specification (SPEC.md)\n\n## Core Architecture\n- Vite Front-matter SPA\n- Stateful Node/Express Daemon Backend\n- File-based database storage with auto-synchronization.\n\n## Modules\n1. Source Ingestion & Token-budget metrics\n2. REPL Loop Execution\n3. Deterministic Grep Indexes\n`;
     this.claude = `# System Guardrails (CLAUDE.md)\n\n- Ensure exact file scanner calculations.\n- Zero mock simulation variables.\n- Complete token compaction.\n`;
 
     // Initialize physical files on disk
     try {
-      if (fs.existsSync(specFilePath)) {
-        this.spec = fs.readFileSync(specFilePath, "utf-8");
+      if (fs.existsSync(resolveSpecFilePath())) {
+        this.spec = fs.readFileSync(resolveSpecFilePath(), "utf-8");
       } else {
-        fs.writeFileSync(specFilePath, this.spec, "utf-8");
+        fs.writeFileSync(resolveSpecFilePath(), this.spec, "utf-8");
       }
 
-      if (fs.existsSync(claudeFilePath)) {
-        this.claude = fs.readFileSync(claudeFilePath, "utf-8");
+      if (fs.existsSync(resolveClaudeFilePath())) {
+        this.claude = fs.readFileSync(resolveClaudeFilePath(), "utf-8");
       } else {
-        fs.writeFileSync(claudeFilePath, this.claude, "utf-8");
+        fs.writeFileSync(resolveClaudeFilePath(), this.claude, "utf-8");
       }
     } catch (e) {
-      console.error("FileSystem specifications failed:", e);
+      logger.error({ err: e }, "FileSystem specifications failed");
     }
 
     // Initialize reporank audit service
     this.reporankAuditService = new ReporankAuditService();
+
+    // Initialize FileVerifier
+    const sandboxExecutor: SandboxCommandExecutor = {
+      runSandboxCommand: (command) => this.runSandboxCommand(command),
+      addLog: (type, msg) => this.addLog(type, msg),
+    };
+    this.fileVerifier = new FileVerifier(sandboxExecutor, process.cwd());
+
+    // Initialize Podman Sandbox
+    const config = getConfig();
+    const secretsManager = new EnvSecretManager();
+    this.podmanSandbox = new PodmanSandbox({
+      baseImage: config.SANDBOX_BASE_IMAGE,
+      memoryLimit: config.SANDBOX_MEMORY_LIMIT,
+      cpuLimit: config.SANDBOX_CPU_LIMIT,
+      pidsLimit: config.SANDBOX_PIDS_LIMIT,
+      readOnlyRootfs: config.SANDBOX_READ_ONLY_ROOTFS,
+      networkDisabled: config.SANDBOX_NETWORK_DISABLED,
+    }, secretsManager);
+
+    // Ensure the base image is available (non-blocking, handles missing Podman gracefully)
+    this.podmanSandbox.ensureImage().catch((err) => {
+      logger.warn({ err }, "Failed to ensure sandbox base image (will retry on first use)");
+    });
 
     // Load persistent state database
     this.loadState();
@@ -154,7 +239,7 @@ export class AgentDaemon {
     }
 
     // Perform initial audit on startup
-    this.performStartupAudit().catch(console.error);
+    this.performStartupAudit().catch((err) => logger.error({ err }, "Startup audit failed"));
 
     // Start background thread logic
     this.start();
@@ -166,6 +251,7 @@ export class AgentDaemon {
 
   private scanAndDetectChanges(init = false): string[] {
     const changedFiles: string[] = [];
+    const visited = new Set<string>();
     const walk = (currentDir: string) => {
       if (!fs.existsSync(currentDir)) return;
       const files = fs.readdirSync(currentDir);
@@ -180,6 +266,7 @@ export class AgentDaemon {
             walk(fullPath);
           } else if (stat.isFile()) {
             const relativePath = path.relative(process.cwd(), fullPath);
+            visited.add(relativePath);
             const mtime = stat.mtimeMs;
             const lastMtime = this.lastModifiedMap.get(relativePath);
             if (lastMtime !== undefined && lastMtime !== mtime) {
@@ -193,6 +280,12 @@ export class AgentDaemon {
       }
     };
     walk(process.cwd());
+    // Prune entries for files that no longer exist
+    for (const relPath of this.lastModifiedMap.keys()) {
+      if (!visited.has(relPath)) {
+        this.lastModifiedMap.delete(relPath);
+      }
+    }
     return changedFiles;
   }
 
@@ -200,7 +293,7 @@ export class AgentDaemon {
     const stats = scanWorkspace(process.cwd());
     this.state.memory.vectorDbHits = stats.linesOfCode;
     this.state.memory.activeGraphStates = stats.filesCount;
-    this.saveState();
+    this.scheduleSave();
   }
 
   public start() {
@@ -217,8 +310,8 @@ export class AgentDaemon {
 
   private loadState() {
     try {
-      if (fs.existsSync(dbPath)) {
-        const stored = JSON.parse(fs.readFileSync(dbPath, "utf-8"));
+      if (fs.existsSync(resolveDbPath())) {
+        const stored = JSON.parse(fs.readFileSync(resolveDbPath(), "utf-8"));
         if (stored.logs) this.logs = stored.logs;
         if (stored.microChanges) this.microChanges = stored.microChanges;
         if (stored.currentPlan) this.currentPlan = stored.currentPlan;
@@ -236,11 +329,11 @@ export class AgentDaemon {
             this.fileEmbeddings = storedEmbed;
           }
         } catch (e) {
-          console.error("Failed to load embeddings.json:", e);
+          logger.error({ err: e }, "Failed to load embeddings.json");
         }
       }
     } catch (e) {
-      console.error("Failed to load db.json, falling back:", e);
+      logger.error({ err: e }, "Failed to load db.json, falling back");
     }
   }
 
@@ -249,11 +342,25 @@ export class AgentDaemon {
       const embeddingsPath = path.resolve(process.cwd(), "embeddings.json");
       fs.writeFileSync(embeddingsPath, JSON.stringify(this.fileEmbeddings, null, 2), "utf-8");
     } catch (e) {
-      console.error("Failed to save embeddings to embeddings.json:", e);
+      logger.error({ err: e }, "Failed to save embeddings to embeddings.json");
     }
   }
 
   public saveState() {
+    this._doSaveState();
+  }
+
+  private scheduleSave() {
+    this._pendingSave = true;
+    if (this._debounceTimer) return;
+    this._debounceTimer = setTimeout(() => {
+      this._pendingSave = false;
+      this._debounceTimer = null;
+      this._doSaveState();
+    }, 500);
+  }
+
+  private _doSaveState() {
     try {
       const data = {
         logs: this.logs,
@@ -264,9 +371,9 @@ export class AgentDaemon {
         secureKey: this.secureKey,
         sandboxLogs: this.sandboxLogs
       };
-      fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), "utf-8");
+      fs.writeFileSync(resolveDbPath(), JSON.stringify(data, null, 2), "utf-8");
     } catch (e) {
-      console.error("Failed to save state to db.json:", e);
+      logger.error({ err: e }, "Failed to save state to db.json");
     }
   }
 
@@ -281,10 +388,10 @@ export class AgentDaemon {
         this.addLog("info", `FS Event: /${file} modified. Triggering continuous verification...`);
         const relativePath = file;
         setTimeout(() => {
-          this.addLog("success", `Verify passed for /${relativePath}. Drift aligned.`);
+          this.addLog(LOG_TYPE.SUCCESS, `Verify passed for /${relativePath}. Drift aligned.`);
           this.addMicroChange("/" + relativePath, "modified", `+1 -0`);
           this.state.sandbox.activeTasks++;
-          this.saveState();
+          this.scheduleSave();
         }, 1500);
       }
       changed = true;
@@ -294,7 +401,7 @@ export class AgentDaemon {
       if (Math.random() > 0.8) {
         this.addLog("info", "Autonomous Audit: Verifying SPEC.md & CLAUDE.md guardrails compliance...");
         setTimeout(() => {
-          this.addLog("success", "Audit complete: Entire local workspace is fully aligned.");
+          this.addLog(LOG_TYPE.SUCCESS, "Audit complete: Entire local workspace is fully aligned.");
         }, 1000);
         changed = true;
       }
@@ -314,7 +421,7 @@ export class AgentDaemon {
     }
 
     if (changed) {
-      this.saveState();
+      this.scheduleSave();
     }
   }
 
@@ -350,17 +457,18 @@ export class AgentDaemon {
         
         // Update state based on audit score
         if (auditReport.score >= 80) {
-          this.addLog("success", "Workspace audit passed with excellent score");
+          this.addLog(LOG_TYPE.SUCCESS, "Workspace audit passed with excellent score");
         } else if (auditReport.score >= 60) {
           this.addLog("warning", "Workspace audit passed but could be improved");
         } else {
-          this.addLog("error", "Workspace audit failed - critical issues found");
+          this.addLog(LOG_TYPE.ERROR, "Workspace audit failed - critical issues found");
         }
         
         this.currentPhase = "Idle";
         this.saveState();
-      } catch (error) {
-        this.addLog("error", `RepoRank audit failed: ${error.message}`);
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.addLog(LOG_TYPE.ERROR, `RepoRank audit failed: ${errMsg}`);
         this.currentPhase = "Error";
         this.saveState();
       }
@@ -375,8 +483,9 @@ export class AgentDaemon {
         setTimeout(async () => {
           await this.performAudit();
         }, 5000); // Delay 5 seconds to let startup complete first
-      } catch (error) {
-        console.error(`Failed to schedule startup audit: ${error.message}`);
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        logger.error("Failed to schedule startup audit: " + errMsg);
       }
     }
 
@@ -397,12 +506,26 @@ export class AgentDaemon {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false });
     this.logs.unshift({ id: randomUUID(), time, msg, type });
     if (this.logs.length > 100) this.logs.pop();
-    this.saveState();
+    this.scheduleSave();
   }
 
   public addMicroChange(file: string, action: "added" | "modified" | "deleted", lines: string) {
     this.microChanges.unshift({ id: randomUUID(), file, action, lines });
     if (this.microChanges.length > 100) this.microChanges.pop();
+    this.scheduleSave();
+  }
+
+  public setActiveWorkflowContext(workflowId: string, workspaceId: string): void {
+    this.activeWorkflowId = workflowId;
+    this.activeWorkspaceId = workspaceId;
+    this.addLog("info", `Active workflow context set: ${workflowId} (workspace: ${workspaceId})`);
+    this.saveState();
+  }
+
+  public async resumeStepAfterApproval(approvalId: string): Promise<void> {
+    this.addLog("info", `Resuming step after approval: ${approvalId}`);
+    // The actual ReAct loop resumption is handled by the workflow coordinator
+    // This method exists to satisfy the interface for approval resolution
     this.saveState();
   }
 
@@ -411,56 +534,71 @@ export class AgentDaemon {
      this.addLog("info", "Initiating REPL execution tree generation...");
      this.saveState();
      
-     try {
-       if (!process.env.GEMINI_API_KEY) {
-          throw new Error("GEMINI_API_KEY is not set.");
-       }
+      try {
+        const prompt = `You are the REPL Engine. Review the SPEC.md and CLAUDE.md below, and create a single-threaded deterministic action plan as a JSON object with this schema:
+        {
+          "message": "reasoning or constraints check",
+          "tree": [
+            { "id": 1, "step": "exact bash/grep command to run", "risk": "Low", "status": "pending" }
+          ]
+        }
 
-       const prompt = `You are the REPL Engine. Review the SPEC.md and CLAUDE.md below, and create a single-threaded deterministic action plan as a JSON object with this schema:
-       {
-         "message": "reasoning or constraints check",
-         "tree": [
-           { "id": 1, "step": "exact bash/grep command to run", "risk": "Low", "status": "pending" }
-         ]
-       }
+        SPEC.md:
+        ${this.spec}
 
-       SPEC.md:
-       ${this.spec}
+        CLAUDE.md:
+        ${this.claude}
+        `;
 
-       CLAUDE.md:
-       ${this.claude}
-       `;
+        const response = await this.withLlmRecovery("generate-repl-plan", async () => {
+          return this.llmProvider.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+            }
+          });
+        });
 
-       const response = await this.getAi().models.generateContent({
-         model: "gemini-2.5-flash",
-         contents: prompt,
-         config: {
-           responseMimeType: "application/json",
-         }
-       });
-
+       console.error("[generatePlan] RAW response text:", JSON.stringify(response.text?.substring(0, 500)));
        const data = JSON.parse(response.text || "{}");
-       this.currentPlan = {
-         success: true,
-         planId: "pln_" + Date.now(),
-         message: data.message || "REPL execution planned.",
-         tree: (data.tree || []).map((t: any) => ({
-           ...t,
-           status: t.status || "pending"
-         }))
-       };
+
+       // Fallback to a heuristic plan if LLM returns an empty or invalid plan
+       if (!data.tree || data.tree.length === 0) {
+         this.addLog("warning", "LLM returned an empty plan. Generating a heuristic fallback plan.");
+         this.currentPlan = {
+           success: true,
+           planId: "pln_heuristic_" + Date.now(),
+           message: data.message || "Heuristic plan generated due to empty LLM response. Improve SPEC.md/CLAUDE.md for better plans.",
+           tree: [
+             { id: "heuristic_1", step: "Review existing SPEC.md and CLAUDE.md for clarity and detail", risk: "Low", status: "pending" },
+             { id: "heuristic_2", step: "Add more detailed requirements to SPEC.md and guardrails to CLAUDE.md", risk: "Medium", status: "pending" },
+             { id: "heuristic_3", step: "Re-run plan generation after updating specifications", risk: "Low", status: "pending" },
+           ],
+         };
+       } else {
+         this.currentPlan = {
+           success: true,
+           planId: "pln_" + Date.now(),
+           message: data.message || "REPL execution planned.",
+           tree: (data.tree || []).map((t: any) => ({
+             ...t,
+             status: t.status || "pending"
+           }))
+         };
+       }
 
        this.currentPhase = "Pending Review";
-       this.addLog("success", "REPL execution plan generated successfully.");
+        this.addLog(LOG_TYPE.SUCCESS, "REPL execution plan generated successfully.");
        this.saveState();
        
-       // Perform audit after plan generation
-       this.performAudit().catch(console.error);
+        // Perform audit after plan generation
+        this.performAudit().catch((err) => logger.error({ err }, "Audit failed"));
        
        return this.currentPlan;
      } catch (err: unknown) {
        const errMsg = err instanceof Error ? err.message : String(err);
-       this.addLog("error", `REPL plan generation failed: ${errMsg}`);
+        this.addLog(LOG_TYPE.ERROR, `REPL plan generation failed: ${errMsg}`);
        this.currentPhase = "Error";
        this.saveState();
        throw err;
@@ -486,7 +624,7 @@ export class AgentDaemon {
       const stats = scanWorkspace(process.cwd());
       fileCount = stats.filesCount || fileCount;
       loc = stats.linesOfCode || loc;
-      realErrors = stats.errorCount;
+      realErrors = stats.suspiciousPatterns;
     } else {
       realErrors = Math.ceil(fileCount * 0.15);
     }
@@ -504,31 +642,31 @@ export class AgentDaemon {
     ];
 
     try {
-      const hasRealKey = process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.includes("dummy");
-      if (hasRealKey) {
-        const prompt = `You are Mutly, an elite repository optimization architect. An end-user uploaded a ${type} repository named "${repoName}" containing ${fileCount} files with approximately ${loc} lines of code.
-        
-        Generate a highly professional, enterprise-grade Repository Optimization Report and Action Tree as JSON with this schema format:
-        {
-          "message": "highly specific analytical critique of the architecture",
-          "tree": [
-            { "id": "generated_id", "step": "highly specific implementation task", "risk": "Low" | "Medium" | "High", "status": "pending" }
-          ]
-        }
+      const prompt = `You are Mutly, an elite repository optimization architect. An end-user uploaded a ${type} repository named "${repoName}" containing ${fileCount} files with approximately ${loc} lines of code.
+      
+      Generate a highly professional, enterprise-grade Repository Optimization Report and Action Tree as JSON with this schema format:
+      {
+        "message": "highly specific analytical critique of the architecture",
+        "tree": [
+          { "id": "generated_id", "step": "highly specific implementation task", "risk": "Low" | "Medium" | "High", "status": "pending" }
+        ]
+      }
 
-        Only return valid JSON matching the schema. Focus on sub-file token management, atomic rollbacks on writes, lightning-fast native grep search, and disabling heavy interactive prompts.`;
+      Only return valid JSON matching the schema. Focus on sub-file token management, atomic rollbacks on writes, lightning-fast native grep search, and disabling heavy interactive prompts.`;
 
-        const response = await this.getAi().models.generateContent({
+      const response = await this.withLlmRecovery("generate-repl-plan", async () => {
+        return this.llmProvider.generateContent({
           model: "gemini-2.5-flash",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
           }
         });
+      });
 
         const parsed = JSON.parse(response.text || "{}");
         if (parsed.message) recommendationMessage = parsed.message;
-        if (parsed.tree) {
+        if (parsed.tree && parsed.tree.length > 0) {
           generatedTree = (parsed.tree || []).map((t: any) => ({
             id: String(t.id || t.step || Math.random()),
             step: String(t.step || ""),
@@ -536,7 +674,6 @@ export class AgentDaemon {
             status: "pending" as const
           }));
         }
-      }
     } catch (e: unknown) {
       const errMsg = e instanceof Error ? e.message : String(e);
       this.addLog("warning", `AI analysis fallback engaged: ${errMsg}`);
@@ -556,7 +693,7 @@ export class AgentDaemon {
     };
 
     this.currentPhase = "Analysis Complete";
-    this.addLog("success", `Analysis of [${repoName}] complete. Synthesized optimization plan.`);
+    this.addLog(LOG_TYPE.SUCCESS, `Analysis of [${repoName}] complete. Synthesized optimization plan.`);
     this.saveState();
     return this.lastAnalysis;
   }
@@ -585,15 +722,13 @@ export class AgentDaemon {
     this.saveState();
     
     try {
-      if (!process.env.GEMINI_API_KEY) {
-        throw new Error("GEMINI_API_KEY is not set.");
-      }
-
       const prompt = `Compress the following execution log into a single, dense tokenized context block ensuring cache layout preservation (max 2 sentences):\nLogs:\n${JSON.stringify(this.logs.slice(0, 10))}`;
       
-      const response = await this.getAi().models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt
+      const response = await this.withLlmRecovery("auto-dream-compaction", async () => {
+        return this.llmProvider.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt
+        });
       });
 
       const responseText = response.text || "Compacted";
@@ -604,7 +739,7 @@ export class AgentDaemon {
       return { success: true, message: responseText };
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.addLog("error", `Compaction failed: ${errMsg}`);
+      this.addLog(LOG_TYPE.ERROR, `Compaction failed: ${errMsg}`);
       this.currentPhase = "Error";
       this.saveState();
       throw err;
@@ -627,7 +762,6 @@ export class AgentDaemon {
     this.saveState();
 
     try {
-      const ai = this.getAi();
       const messages: any[] = [
         {
           role: "user",
@@ -655,7 +789,7 @@ Strict rules:
       const toolRegistry = new ToolRegistry();
       toolRegistry.registerMany(nativeTools);
 
-      if (enableVibeServe) {
+      if (getConfig().ENABLE_VIBESERVE_MCP) {
         const enabledTools = (process.env.VIBESERVE_ENABLED_TOOLS || "vs_memory_get,vs_memory_store,vs_schema_validate")
           .split(",")
           .map(t => t.trim());
@@ -681,9 +815,9 @@ Strict rules:
         daemon: this
       };
 
-      const toolsConfig = [
+      const toolsConfig: any[] = [
         {
-          functionDeclarations: toolRegistry.getFunctionDeclarations()
+          functionDeclarations: toolRegistry.getFunctionDeclarations() as any
         }
       ];
 
@@ -695,12 +829,14 @@ Strict rules:
         loopCount++;
         this.addLog("info", `ReAct Turn ${loopCount}: Querying LLM...`);
         
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: messages,
-          config: {
-            tools: toolsConfig,
-          }
+        const response = await this.withLlmRecovery(`react-turn-${loopCount}`, async () => {
+          return this.llmProvider.generateContent({
+            model: "gemini-2.5-flash",
+            contents: messages,
+            config: {
+              tools: toolsConfig,
+            }
+          });
         });
 
         const candidateContent = response.candidates?.[0]?.content;
@@ -711,27 +847,28 @@ Strict rules:
         const functionCalls = response.functionCalls;
         if (!functionCalls || functionCalls.length === 0) {
           finalText = response.text || "Step execution complete.";
-          this.addLog("success", `ReAct Final: ${finalText}`);
+          this.addLog(LOG_TYPE.SUCCESS, `ReAct Final: ${finalText}`);
           break;
         }
 
         const toolResponses: any[] = [];
         for (const call of functionCalls) {
           const { name, args, id } = call;
-          this.addLog("system", `ReAct Loop: System calling "${name}" tool with args: ${JSON.stringify(args)}`);
+          const toolName = name ?? "unknown_tool";
+          this.addLog("system", `ReAct Loop: System calling "${toolName}" tool with args: ${JSON.stringify(args)}`);
 
           let result: any = null;
           try {
-            result = await toolRegistry.execute(name, args ?? {}, toolContext);
+            result = await toolRegistry.execute(toolName, args ?? {}, toolContext);
           } catch (toolErr: any) {
             result = { error: toolErr.message };
-            this.addLog("error", `Tool Error: ${toolErr.message}`);
+            this.addLog(LOG_TYPE.ERROR, `Tool Error: ${toolErr.message}`);
           }
 
           toolResponses.push({
             name,
             response: result,
-            id
+            id: id ?? randomUUID()
           });
         }
 
@@ -750,16 +887,21 @@ Strict rules:
        step.status = "complete";
        this.currentPhase = "Idle";
        this.updateWorkspaceMetrics();
-       this.addLog("success", `Step [${stepId}] executed successfully via ReAct Tool Loop.`);
+       if (finalText) {
+         this.addLog(LOG_TYPE.SUCCESS, `Step [${stepId}] executed successfully via ReAct Tool Loop.`);
+       } else {
+         step.status = "failed";
+         this.addLog(LOG_TYPE.ERROR, `Step [${stepId}]: Exhausted max turns (${maxTurns}) without completion.`);
+       }
        
-       // Audit after step completion
-       this.performAudit().catch(console.error);
-       
-       this.saveState();
+        // Audit after step completion
+        this.performAudit().catch((err) => logger.error({ err }, "Audit after step completion failed"));
+        
+        this.saveState();
     } catch (err: any) {
       step.status = "failed";
       this.currentPhase = "Error";
-      this.addLog("error", `ReAct Tool Loop failed for step [${stepId}]: ${err.message}`);
+      this.addLog(LOG_TYPE.ERROR, `ReAct Tool Loop failed for step [${stepId}]: ${err.message}`);
       this.saveState();
       throw err;
     }
@@ -803,8 +945,6 @@ Strict rules:
       let newEmbeddings: FileEmbeddingMeta[] = [];
       let indexCount = 0;
       
-      const ai = this.getAi();
-      
       for (const relPath of eligibleFiles) {
         const fullPath = path.join(root, relPath);
         const stat = fs.statSync(fullPath);
@@ -832,24 +972,26 @@ Strict rules:
           if (i + chunkSize >= lines.length) break;
         }
         
-        const embeddingChunks: EmbeddingChunk[] = [];
-        for (const chunk of chunks) {
-          try {
-            const res = await ai.models.embedContent({
-              model: "gemini-embedding-2-preview",
-              contents: chunk,
-            });
-            const embedding = (res as any).embedding?.values || (res as any).embeddings?.[0]?.values;
-            if (embedding) {
-              embeddingChunks.push({ text: chunk, embedding });
-              indexCount++;
-            }
-            // Simple rate limit protection
-            await new Promise((r) => setTimeout(r, 100));
-          } catch (embedErr) {
-            console.error(`Failed to embed chunk in file ${relPath}:`, embedErr);
-          }
-        }
+         const embeddingChunks: EmbeddingChunk[] = [];
+         for (const chunk of chunks) {
+            try {
+              const res = await this.withLlmRecovery(`embed-chunk-${relPath}`, async () => {
+                return this.llmProvider.embedContent({
+                  model: "gemini-embedding-2-preview",
+                  contents: chunk,
+                });
+              });
+             const embedding = (res as any).embedding?.values || (res as any).embeddings?.[0]?.values;
+             if (embedding) {
+               embeddingChunks.push({ text: chunk, embedding });
+               indexCount++;
+             }
+             // Simple rate limit protection
+             await new Promise((r) => setTimeout(r, 100));
+           } catch (embedErr) {
+             logger.error({ err: embedErr }, `Failed to embed chunk in file ${relPath}`);
+           }
+         }
         
         newEmbeddings.push({
           filePath: relPath,
@@ -868,13 +1010,13 @@ Strict rules:
       
       this.state.memory.vectorDbHits = totalChunks;
       this.indexingState = "idle";
-      this.addLog("success", `Workspace semantically indexed: ${totalChunks} chunks active (${indexCount} newly generated).`);
+      this.addLog(LOG_TYPE.SUCCESS, `Workspace semantically indexed: ${totalChunks} chunks active (${indexCount} newly generated).`);
       this.saveState();
       
       return { totalChunks, filesIndexed: eligibleFiles.length };
     } catch (err: any) {
-      this.indexingState = "error";
-      this.addLog("error", `Semantic indexing failed: ${err.message}`);
+      this.indexingState = STATUS.ERROR;
+      this.addLog(LOG_TYPE.ERROR, `Semantic indexing failed: ${err.message}`);
       this.saveState();
       throw err;
     }
@@ -885,10 +1027,11 @@ Strict rules:
     
     try {
       this.addLog("info", `Semantic Search: Generating query embedding for "${query}"...`);
-      const ai = this.getAi();
-      const res = await ai.models.embedContent({
-        model: "gemini-embedding-2-preview",
-        contents: query,
+      const res = await this.withLlmRecovery("search-embeddings", async () => {
+        return this.llmProvider.embedContent({
+          model: "gemini-embedding-2-preview",
+          contents: query,
+        });
       });
       const queryVector = (res as any).embedding?.values || (res as any).embeddings?.[0]?.values;
       if (!queryVector) {
@@ -912,148 +1055,348 @@ Strict rules:
       results.sort((a, b) => b.score - a.score);
       const topResults = results.slice(0, 5);
       
-      this.addLog("success", `Cosine Search: Complete. Highest match: ${topResults[0]?.filePath} (similarity: ${(topResults[0]?.score * 100).toFixed(1)}%).`);
+      this.addLog(LOG_TYPE.SUCCESS, `Cosine Search: Complete. Highest match: ${topResults[0]?.filePath} (similarity: ${(topResults[0]?.score * 100).toFixed(1)}%).`);
       return topResults;
     } catch (err: any) {
-      this.addLog("error", `Cosine vector search failed: ${err.message}`);
+      this.addLog(LOG_TYPE.ERROR, `Cosine vector search failed: ${err.message}`);
       throw err;
     }
   }
 
-  public async runSandboxCommand(command: string): Promise<any> {
+  private async getEmbeddings(text: string): Promise<number[]> {
+    const res = await this.withLlmRecovery("get-embeddings", async () => {
+      return this.llmProvider.embedContent({
+        model: "gemini-embedding-2-preview",
+        contents: text,
+      });
+    });
+    return (res as any).embedding?.values || (res as any).embeddings?.[0]?.values || [];
+  }
+
+  async searchCodeSemantically(query: string, maxResults = 10): Promise<Array<{ filePath: string; score: number; snippet: string }>> {
+    if (!query || query.trim() === "") return [];
+
+    try {
+      const embeddings = await this.getEmbeddings(query);
+      if (!embeddings.length || !this.fileEmbeddings.length) return [];
+
+      const results: Array<{ filePath: string; score: number; snippet: string }> = [];
+
+      for (const fileMeta of this.fileEmbeddings) {
+        let bestScore = 0;
+        let bestSnippet = "";
+        for (const chunk of fileMeta.chunks) {
+          const score = cosineSimilarity(embeddings, chunk.embedding);
+          if (score > bestScore) {
+            bestScore = score;
+            bestSnippet = chunk.text.slice(0, 200);
+          }
+        }
+        if (bestScore > 0.3) {
+          results.push({
+            filePath: fileMeta.filePath,
+            score: bestScore,
+            snippet: bestSnippet,
+          });
+        }
+      }
+
+      results.sort((a, b) => b.score - a.score);
+      return results.slice(0, maxResults);
+    } catch (err: any) {
+      this.addLog(LOG_TYPE.ERROR, `Semantic code search failed: ${err.message}`);
+      return [];
+    }
+  }
+
+  public async runSandboxCommand(command: string): Promise<{
+    success: boolean;
+    code: number | null;
+    stdout: string;
+    stderr: string;
+    durationMs: number;
+    error?: string;
+  }> {
+    const validated = validateSandboxCommand(command);
+    if (!validated) {
+      this.sandboxStatus = STATUS.ERROR;
+      this.sandboxActiveCommand = "";
+      this.addSandboxLog("stderr", `Validation Error: Command "${command}" is rejected for security reasons.`);
+      this.saveState();
+      return {
+        success: false,
+        code: -1,
+        stdout: "",
+        stderr: "Validation Error: Command rejected (malicious or disallowed pattern).",
+        error: "Command rejected",
+        durationMs: 0
+      };
+    }
+
     if (this.sandboxStatus === "running") {
       throw new Error("Sandbox is already executing a command.");
     }
-    
+
     this.sandboxStatus = "running";
     this.sandboxActiveCommand = command;
     this.addSandboxLog("system", `$ Run sandbox command: "${command}"`);
     this.saveState();
-    
+
     const sandboxPath = "/tmp/mutly-sandbox-workspace";
     const startTime = Date.now();
-    
+
+    const copyFolder = (from: string, to: string) => {
+      if (!fs.existsSync(from)) return;
+      if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true });
+
+      const items = fs.readdirSync(from);
+      for (const item of items) {
+        if ([
+          "node_modules",
+          "dist",
+          ".git",
+          ".next",
+          "coverage",
+          "db.json",
+          "dist-server",
+          "mutly-sandbox",
+          "dist-sandbox"
+        ].includes(item)) continue;
+
+        const src = path.join(from, item);
+        const dst = path.join(to, item);
+        const stat = fs.statSync(src);
+
+        if (stat.isDirectory()) {
+          copyFolder(src, dst);
+        } else {
+          fs.mkdirSync(path.dirname(dst), { recursive: true });
+          fs.writeFileSync(dst, fs.readFileSync(src));
+        }
+      }
+    };
+
+    const clearFolder = (dir: string) => {
+      if (!fs.existsSync(dir)) return;
+      const items = fs.readdirSync(dir);
+      for (const item of items) {
+        const full = path.join(dir, item);
+        const stat = fs.statSync(full);
+        if (stat.isDirectory()) {
+          fs.rmSync(full, { recursive: true, force: true });
+        } else {
+          fs.rmSync(full, { force: true });
+        }
+      }
+    };
+
     try {
-      // 1. Re-sync directories to isolated folder
       if (fs.existsSync(sandboxPath)) {
-        // Simple recursive clear (excluding node_modules to preserve our symlink!)
-        const clearFolder = (dir: string) => {
-          if (!fs.existsSync(dir)) return;
-          const items = fs.readdirSync(dir);
-          for (const item of items) {
-            if (item === "node_modules") continue;
-            const full = path.join(dir, item);
-            if (fs.statSync(full).isDirectory()) {
-              clearFolder(full);
-              try { fs.rmdirSync(full); } catch (e) {}
-            } else {
-              try { fs.unlinkSync(full); } catch (e) {}
-            }
-          }
-        };
         clearFolder(sandboxPath);
       } else {
         fs.mkdirSync(sandboxPath, { recursive: true });
       }
-      
-      // Copy files
-      const copyFolder = (from: string, to: string) => {
-        if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true });
-        const items = fs.readdirSync(from);
-        for (const item of items) {
-          if (["node_modules", "dist", ".git", ".next", "coverage", "db.json", "dist-server", "mutly-sandbox", "dist-sandbox"].includes(item)) continue;
-          const src = path.join(from, item);
-          const dst = path.join(to, item);
-          const stat = fs.statSync(src);
-          if (stat.isDirectory()) {
-            copyFolder(src, dst);
-          } else {
-            fs.writeFileSync(dst, fs.readFileSync(src));
-          }
-        }
-      };
+
+      // 1. Copy host workspace into sandbox workspace BEFORE execution
       copyFolder(process.cwd(), sandboxPath);
-      
-      // Symlink node_modules for ultra-fast, zero-download compiling
-      const sandboxModules = path.join(sandboxPath, "node_modules");
-      if (!fs.existsSync(sandboxModules)) {
-        const realModules = path.resolve(process.cwd(), "node_modules");
-        if (fs.existsSync(realModules)) {
-          try {
-            fs.symlinkSync(realModules, sandboxModules);
-          } catch (e) {
-            console.error("Symlink node_modules failed:", e);
+      this.addSandboxLog("system", `✓ Synced workspace to ${sandboxPath}`);
+
+      this.state.sandbox.activeTasks++;
+      this.saveState();
+
+      // 2. Execute with recovery (retries, circuit breaker, alternative strategies, replanning)
+      const result = await withRecovery<SandboxCommandOutput>({
+        operation: "runSandboxCommand",
+        primaryFn: () => this.podmanSandbox.runCommand(command, {
+          workspacePath: sandboxPath,
+          timeoutMs: 25000,
+        }),
+        circuitBreaker: this.containerCircuitBreaker,
+        maxRetries: 2,
+        baseDelayMs: 1000,
+        maxDelayMs: 10000,
+        alternativeStrategies: [
+          {
+            name: "rebuild-container",
+            execute: async () => {
+              this.addSandboxLog("system", "Attempting container rebuild strategy...");
+              await this.podmanSandbox.ensureImage(); // Re-pull image
+              return this.podmanSandbox.runCommand(command, {
+                workspacePath: sandboxPath,
+                timeoutMs: 25000,
+              });
+            },
+          },
+        ],
+        onReplan: async (classified: ClassifiedError) => {
+          this.addLog("warning", `Sandbox failure for "${command}" — triggering agent replan`);
+          // The replan logic would be implemented here
+          // For now, we return a failure result that the agent can interpret
+          return {
+            exitCode: -1,
+            stdout: "",
+            stderr: classified.originalError.message,
+            duration_ms: Date.now() - startTime,
+          };
+        },
+        classifyError: (err) => {
+          const error = err instanceof Error ? err : new Error(String(err));
+          if (error.message.includes("podman") || error.message.includes("container") || error.message.includes("OCI")) {
+            return { class: "RECOVERABLE", origin: "container", originalError: error };
           }
-        }
-      }
-      
-      this.addSandboxLog("system", "✓ Sync complete relative to /tmp/mutly-sandbox-workspace");
-      this.addSandboxLog("system", "✓ Symlinked node_modules to workspace. Launching sandboxed process...");
-      this.saveState();
-      
-      // 2. Execute process in the sandbox environment
-      return new Promise((resolve) => {
-        const child = exec(command, { cwd: sandboxPath, timeout: 25000 });
-        let stdout = "";
-        let stderr = "";
-        
-        child.stdout?.on("data", (data) => {
-          const text = data.toString();
-          stdout += text;
-          this.addSandboxLog("stdout", text);
-        });
-        
-        child.stderr?.on("data", (data) => {
-          const text = data.toString();
-          stderr += text;
-          this.addSandboxLog("stderr", text);
-        });
-        
-        child.on("close", (code) => {
-          const duration = Date.now() - startTime;
-          this.sandboxStatus = code === 0 ? "idle" : "error";
-          this.sandboxActiveCommand = "";
-          
-          this.addSandboxLog("system", `\nProcess returned exit code ${code} (completed in ${duration}ms).`);
-          
-          this.state.sandbox.activeTasks++;
-          this.saveState();
-          
-          resolve({
-            success: code === 0,
-            code,
-            stdout,
-            stderr,
-            durationMs: duration
-          });
-        });
-        
-        child.on("error", (err) => {
-          const duration = Date.now() - startTime;
-          this.sandboxStatus = "error";
-          this.sandboxActiveCommand = "";
-          this.addSandboxLog("stderr", `Execution Error: ${err.message}`);
-          this.saveState();
-          
-          resolve({
-            success: false,
-            code: -1,
-            stdout,
-            stderr,
-            error: err.message,
-            durationMs: duration
-          });
-        });
+          return { class: "TRANSIENT", origin: "network", originalError: error };
+        },
       });
-    } catch (err: any) {
-      this.sandboxStatus = "error";
+
+      // 3. Copy sandbox changes back to host AFTER execution
+      copyFolder(sandboxPath, process.cwd());
+      this.addSandboxLog("system", "✓ Synced sandbox changes back to workspace");
+
+      this.sandboxStatus = result.exitCode === 0 ? STATUS.IDLE : STATUS.ERROR;
       this.sandboxActiveCommand = "";
-      this.addSandboxLog("stderr", `Sandbox Sync Error: ${err.message}`);
+
+      this.addSandboxLog(
+        "system",
+        `Process returned exit code ${result.exitCode} (completed in ${result.duration_ms}ms).`
+      );
+
+      if (result.stdout) this.addSandboxLog("stdout", result.stdout);
+      if (result.stderr) this.addSandboxLog("stderr", result.stderr);
+
+      return {
+        success: result.exitCode === 0,
+        code: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        durationMs: result.duration_ms ?? Date.now() - startTime,
+        error: result.exitCode !== 0 ? result.stderr : undefined,
+      };
+    } catch (err: any) {
+      this.sandboxStatus = STATUS.ERROR;
+      this.sandboxActiveCommand = "";
+      this.addSandboxLog("stderr", `Execution Error: ${err.message}`);
+
+      return {
+        success: false,
+        code: -1,
+        stdout: "",
+        stderr: err.message,
+        error: err.message,
+        durationMs: Date.now() - startTime,
+      };
+    } finally {
+      this.state.sandbox.activeTasks = Math.max(0, this.state.sandbox.activeTasks - 1);
       this.saveState();
-      return { success: false, code: -1, stdout: "", stderr: "", error: err.message, durationMs: 0 };
     }
   }
-  
+
+  public async performPostEditVerification(filePath: string): Promise<boolean> {
+    this.addLog("info", `Verification: Starting post-edit type check for "${filePath}"`);
+    this.currentPhase = "Verifying Code";
+    this.saveState();
+    try {
+      const verificationResult = await this.fileVerifier.verifyFile(filePath);
+
+      if (!verificationResult.success) {
+        const errorMessages = verificationResult.errors.map(e => e.raw).join('\n');
+        this.addLog(LOG_TYPE.ERROR, `Verification: Type check failed for "${filePath}" with ${verificationResult.errors.length} errors.\n${errorMessages}`);
+        
+        // Attempt auto-fix retries (handled by AgentDaemon, not FileVerifier)
+        let attempt = 0;
+        const maxRetries = 3;
+        let currentError = errorMessages;
+        while (attempt < maxRetries) {
+          attempt++;
+          this.addLog("info", `Auto-fix attempt ${attempt}/${maxRetries} for "${filePath}"...`);
+          const fixed = await this.autoFixCode(filePath, currentError);
+          if (fixed) {
+            this.addLog(LOG_TYPE.SUCCESS, `Auto-fix succeeded on attempt ${attempt} for "${filePath}"`);
+            this.currentPhase = "Idle";
+            this.saveState();
+            return true;
+          }
+          // Re-read the error from re-verification for the next attempt
+          const reResult = await this.runSandboxCommand(`npx tsc --noEmit ${filePath}`);
+          if (!reResult.success) {
+            currentError = reResult.stderr.trim() || reResult.stdout.trim() || `Auto-fix attempt ${attempt} incomplete`;
+          }
+        }
+        this.addLog(LOG_TYPE.ERROR, `Verification: Type check failed for "${filePath}" after ${maxRetries} auto-fix attempts`);
+        this.currentPhase = "Idle";
+        this.saveState();
+        return false;
+      }
+
+      this.addLog(LOG_TYPE.SUCCESS, `Verification: Type check passed for "${filePath}"`);
+      this.currentPhase = "Idle";
+      this.saveState();
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.addLog(LOG_TYPE.ERROR, `Verification: Unexpected error during verification for "${filePath}": ${msg}`);
+      this.currentPhase = "Idle";
+      this.saveState();
+      return false;
+    }
+  }
+
+  private async autoFixCode(filePath: string, errorLog: string): Promise<boolean> {
+    try {
+      const fullPath = path.resolve(process.cwd(), filePath);
+      if (!fs.existsSync(fullPath)) {
+        this.addLog(LOG_TYPE.ERROR, `Auto-fix: File not found "${filePath}"`);
+        return false;
+      }
+      const currentContent = fs.readFileSync(fullPath, "utf-8");
+
+      const prompt = `You are Mutly, an AI assistant that fixes TypeScript type errors. The file "${filePath}" has the following type errors:
+
+\`\`\`
+${errorLog.slice(0, 3000)}
+\`\`\`
+
+Here is the current file content:
+\`\`\`typescript
+${currentContent}
+\`\`\`
+
+Please provide the ENTIRE corrected file content as a single code block. Fix only the type errors — do not add features or change behavior. Return ONLY the corrected code, nothing else. If you cannot fix it, return the original content unchanged.`;
+
+      const response = await this.withLlmRecovery(`auto-fix-${filePath}`, async () => {
+        return this.llmProvider.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+        });
+      });
+
+      const correctedContent = response.text?.trim() || "";
+
+      if (!correctedContent || correctedContent === currentContent) {
+        this.addLog("warning", `Auto-fix: No changes suggested for "${filePath}"`);
+        return false;
+      }
+
+      // Extract code block if wrapped in markdown
+      let codeToWrite = correctedContent;
+      const codeBlockMatch = correctedContent.match(/```[\w]*\n([\s\S]*?)\n```/);
+      if (codeBlockMatch) {
+        codeToWrite = codeBlockMatch[1];
+      }
+
+      // Write the fixed content
+      fs.writeFileSync(fullPath, codeToWrite, "utf-8");
+      this.addLog("info", `Auto-fix: Applied fix to "${filePath}"`);
+
+      // Re-verify
+      const reVerifyResult = await this.runSandboxCommand("npm run lint");
+      return reVerifyResult.success;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.addLog(LOG_TYPE.ERROR, `Auto-fix: Unexpected error fixing "${filePath}": ${msg}`);
+      return false;
+    }
+  }
+
   private addSandboxLog(stream: "stdout" | "stderr" | "system", text: string) {
     const lines = text.split("\n");
     for (const l of lines) {

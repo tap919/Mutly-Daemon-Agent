@@ -22,6 +22,7 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { logger } from "../server/lib/logger.js";
 
 interface SWEInstance {
   repo: string;
@@ -71,7 +72,7 @@ function mutlyBuild(workspaceDir: string): void {
 
 async function runSingleInstance(instance: SWEInstance, outputDir: string): Promise<InstanceResult> {
   const t0 = performance.now();
-  console.log(`[swe] Processing ${instance.instance_id} (${instance.repo})`);
+  logger.info(`[swe] Processing ${instance.instance_id} (${instance.repo})`);
 
   const instanceDir = path.join(outputDir, "workspaces", instance.instance_id);
   const resultDir = path.join(outputDir, "results");
@@ -92,18 +93,18 @@ async function runSingleInstance(instance: SWEInstance, outputDir: string): Prom
     // Step 1: Clone repo at base commit
     if (!fs.existsSync(instanceDir)) {
       const repoUrl = `https://github.com/${instance.repo}.git`;
-      console.log(`[swe] Cloning ${repoUrl} @ ${instance.base_commit}...`);
+      logger.info(`[swe] Cloning ${repoUrl} @ ${instance.base_commit}...`);
       execSync(`git clone "${repoUrl}" "${instanceDir}"`, { stdio: "pipe", timeout: 120_000 });
       execSync(`git checkout ${instance.base_commit}`, { cwd: instanceDir, stdio: "pipe", timeout: 30_000 });
     }
 
     // Step 2: Run Mutly pipeline
-    console.log(`[swe] Running Mutly pipeline...`);
+    logger.info(`[swe] Running Mutly pipeline...`);
     result.resolution_attempted = true;
     try {
       mutlyBuild(instanceDir);
     } catch (pipelineErr) {
-      console.warn(`[swe] Pipeline warning: ${(pipelineErr as Error).message}`);
+      logger.warn({ err: pipelineErr }, `[swe] Pipeline warning`);
     }
 
     // Step 3: Capture diff
@@ -122,12 +123,12 @@ async function runSingleInstance(instance: SWEInstance, outputDir: string): Prom
 
     result.duration_ms = Math.round(performance.now() - t0);
     fs.writeFileSync(path.join(resultDir, `${instance.instance_id}.json`), JSON.stringify(result, null, 2));
-    console.log(`[swe] ${instance.instance_id}: ${result.passed ? "PASSED" : "FAILED"} (${result.duration_ms}ms)`);
+    logger.info(`[swe] ${instance.instance_id}: ${result.passed ? "PASSED" : "FAILED"} (${result.duration_ms}ms)`);
   } catch (err) {
     result.error = (err as Error).message;
     result.duration_ms = Math.round(performance.now() - t0);
     fs.writeFileSync(path.join(resultDir, `${instance.instance_id}.json`), JSON.stringify(result, null, 2));
-    console.error(`[swe] ${instance.instance_id}: ERROR — ${result.error}`);
+    logger.error(`[swe] ${instance.instance_id}: ERROR — ${result.error}`);
   }
 
   return result;
@@ -159,15 +160,15 @@ except Exception as e:
 " 2>&1`,
       { encoding: "utf-8", timeout: 60_000 }
     );
-    return result
+    return (result ?? "")
       .trim()
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as SWEInstance);
   } catch (err) {
-    console.error("[swe] Failed to load dataset from HuggingFace. Make sure datasets is installed:");
-    console.error("  pip install datasets");
-    console.error(`  Error: ${(err as Error).message}`);
+    logger.error("[swe] Failed to load dataset from HuggingFace. Make sure datasets is installed:");
+    logger.error("  pip install datasets");
+    logger.error({ err }, `  Error`);
     return [];
   }
 }
@@ -180,7 +181,7 @@ async function generatePredictions(results: InstanceResult[], outputDir: string)
   }));
   const jsonl = predictions.map((p) => JSON.stringify(p)).join("\n");
   fs.writeFileSync(path.join(outputDir, "predictions.jsonl"), jsonl);
-  console.log(`[swe] Wrote ${predictions.length} predictions to ${path.join(outputDir, "predictions.jsonl")}`);
+  logger.info(`[swe] Wrote ${predictions.length} predictions to ${path.join(outputDir, "predictions.jsonl")}`);
 }
 
 function generateSummary(results: InstanceResult[], outputDir: string): void {
@@ -201,7 +202,7 @@ function generateSummary(results: InstanceResult[], outputDir: string): void {
     avg_duration_ms: avgDuration,
   };
   fs.writeFileSync(path.join(outputDir, "summary.json"), JSON.stringify(summary, null, 2));
-  console.log(`[swe] Summary: ${resolved}/${total} resolved (${(summary.resolution_rate * 100).toFixed(1)}%)`);
+  logger.info(`[swe] Summary: ${resolved}/${total} resolved (${(summary.resolution_rate * 100).toFixed(1)}%)`);
 }
 
 async function main(): Promise<void> {
@@ -216,17 +217,17 @@ async function main(): Promise<void> {
     instances.push(JSON.parse(raw) as SWEInstance);
   } else if (dataset) {
     // Batch mode from HuggingFace dataset
-    console.log(`[swe] Loading up to ${maxInstances} instances from ${dataset}...`);
+    logger.info(`[swe] Loading up to ${maxInstances} instances from ${dataset}...`);
     const loaded = await loadInstances(dataset, maxInstances);
     instances.push(...loaded);
     if (instances.length === 0) {
-      console.error("[swe] No instances loaded. Exiting.");
+      logger.error("[swe] No instances loaded. Exiting.");
       process.exit(1);
     }
   } else {
-    console.error("Usage:");
-    console.error("  Single: npx tsx swe-bench-runner.ts --instance <file.jsonl> --output <dir>");
-    console.error("  Batch:  npx tsx swe-bench-runner.ts --dataset SWE-bench_Lite --output <dir> --max 10");
+    logger.error("Usage:");
+    logger.error("  Single: npx tsx swe-bench-runner.ts --instance <file.jsonl> --output <dir>");
+    logger.error("  Batch:  npx tsx swe-bench-runner.ts --dataset SWE-bench_Lite --output <dir> --max 10");
     process.exit(1);
   }
 
@@ -249,6 +250,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[swe] Fatal:", err.message);
+  logger.fatal({ err }, "[swe] Fatal");
   process.exit(2);
 });

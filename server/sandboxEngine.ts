@@ -3,7 +3,7 @@
 
 import fs from "fs";
 import path from "path";
-import { exec } from "child_process";
+import { spawn } from "child_process";
 
 /**
  * Recursively clears directory contents, excluding node_modules to preserve symlinked dependencies.
@@ -63,16 +63,23 @@ export function copyFolder(from: string, to: string): void {
 }
 
 /**
- * Performs execution of arbitrary shell commands in sandbox path with timeout triggers.
+ * Performs execution of validated commands in sandbox path with timeout triggers.
+ * Uses spawn() with shell:false to prevent shell injection.
  */
 export function executeIsolatedCommand(
-  command: string,
+  cmd: string,
+  args: string[],
   sandboxPath: string,
   onStdout: (text: string) => void,
   onStderr: (text: string) => void,
   onClose: (code: number | null) => void
 ): () => void {
-  const child = exec(command, { cwd: sandboxPath, timeout: 25000 });
+  const child = spawn(cmd, args, {
+    cwd: sandboxPath,
+    timeout: 25000,
+    shell: false,
+    windowsHide: true,
+  });
   let finalized = false;
   
   child.stdout?.on("data", (data) => {
@@ -103,4 +110,92 @@ export function executeIsolatedCommand(
       child.kill();
     } catch (e) {}
   };
+}
+
+export interface ValidatedCommand {
+  cmd: string;
+  args: string[];
+}
+
+/**
+ * Validates and sanitizes a sandbox command to prevent shell injection or unauthorized commands.
+ * Returns the parsed command + args for use with spawn() if valid, or null if rejected.
+ */
+export function validateSandboxCommand(command: any): ValidatedCommand | null {
+  if (typeof command !== "string") return null;
+  
+  const trimmed = command.trim();
+  if (!trimmed) return null;
+  
+  // Reject any shell metacharacters (using spawn with shell:false as primary defense)
+  // This is a secondary safety net for any edge cases
+  if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(trimmed)) {
+    return null;
+  }
+  
+  // Parse into command and args (split on whitespace, preserve quoted args)
+  const parts: string[] = [];
+  let current = "";
+  let inQuote: string | null = null;
+  for (const ch of trimmed) {
+    if (ch === '"' || ch === "'") {
+      if (inQuote === ch) {
+        inQuote = null;
+        if (current) { parts.push(current); current = ""; }
+      } else if (!inQuote) {
+        inQuote = ch;
+      } else {
+        current += ch;
+      }
+    } else if (ch === " " && !inQuote) {
+      if (current) { parts.push(current); current = ""; }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) parts.push(current);
+  
+  if (parts.length === 0) return null;
+  
+  const baseCommand = parts[0];
+  
+  // Allowlist of safe base commands
+  const allowedBaseCommands = ["npm", "npx", "node", "tsc", "git", "vitest", "eslint", "prettier"];
+  if (!allowedBaseCommands.includes(baseCommand)) {
+    return null;
+  }
+  
+  // Validate npx subcommands
+  if (baseCommand === "npx") {
+    const subCommand = parts[1];
+    const allowedNpxSubCommands = ["vitest", "tsc", "eslint", "prettier", "create", "prisma"];
+    if (!subCommand || !allowedNpxSubCommands.includes(subCommand)) {
+      return null;
+    }
+  }
+  
+  // Validate git: only allow safe git operations
+  if (baseCommand === "git") {
+    const allowedGitSubCommands = ["status", "diff", "log", "add", "commit", "push", "pull", "fetch", "checkout", "branch", "merge", "init", "clone", "remote", "config"];
+    const gitSub = parts[1];
+    if (!gitSub || !allowedGitSubCommands.includes(gitSub)) {
+      return null;
+    }
+  }
+  
+  // Prevent npm from running lifecycle scripts with --unsafe-perm or similar
+  if (baseCommand === "npm") {
+    const flags = parts.slice(2);
+    const forbiddenFlags = flags.filter(f => f.startsWith("--")).some(f => /unsafe|allow|ignore|force/i.test(f));
+    if (forbiddenFlags) return null;
+  }
+  
+  // Reject known dangerous flags/patterns
+  const restArgs = parts.slice(2).join(" ");
+  const dangerousPatterns = ["--allow-eval", "--unsafe", "eval(", "Function("];
+  if (dangerousPatterns.some(p => restArgs.includes(p))) {
+    return null;
+  }
+  
+  return { cmd: baseCommand, args: parts.slice(1) };
 }

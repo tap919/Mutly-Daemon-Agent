@@ -1,5 +1,5 @@
 import { logger } from "../lib/logger.js";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, extname, relative } from "node:path";
 import { createHash } from "node:crypto";
 import chalk from "chalk";
@@ -194,6 +194,12 @@ export class ReporankAuditService {
         hygieneScore: 0,
         configCoherence: 0,
         dependencyFreshness: 0,
+        deepScore: 0,
+        deepFindings: [],
+        vulnerabilityCount: 0,
+        outdatedPackageCount: 0,
+        largeFileCount: 0,
+        securityIssues: 0,
         recommendations: r.recommendations ?? [],
       },
       secrets: {
@@ -449,14 +455,18 @@ export class ReporankAuditService {
     // Only exclude lines that are clearly documentation or test fixtures, not real secrets.
     const isLikelyFalsePositive = (line: string, filePath: string): boolean => {
       const lower = line.toLowerCase();
-      // Exclude if the file is in a test directory
-      if (/\/(test|tests|spec|__tests__|fixtures|mocks?|examples?|docs?)\//i.test(filePath)) {
+      // Exclude if the file is in a test directory (support both *nix and Windows paths)
+      if (/[/\\\\](test|tests|spec|__tests__|fixtures|mocks?|examples?|docs?)[/\\\\]/i.test(filePath)) {
         return true;
       }
       // Exclude if the line is clearly a placeholder/example with a recognizable marker
       // (e.g. variable name contains EXAMPLE, TEST, FAKE, DUMMY, PLACEHOLDER)
       if (/\b(example|placeholder|dummy|fake|test|xxx+|sample)\b/i.test(lower) &&
           /(your[_-]|replace[_-]|<.+>|xxx+|fake|placeholder|example)/i.test(lower)) {
+        return true;
+      }
+      // Exclude connection strings pointing at localhost (always development-only)
+      if (/localhost/.test(line) && /(redis|postgresql|mysql|mongodb):\/\//i.test(line)) {
         return true;
       }
       return false;

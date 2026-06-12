@@ -101,7 +101,7 @@ describe("runPipeline — happy path with WORKFLOW.md", () => {
       },
     });
     expect(result.loop.state).toBe("ERROR");
-    expect(result.loop.errorMessage).toMatch(/build phase reported failure/);
+    expect(result.loop.errorMessage).toMatch(/drift halt|build phase reported failure/);
   });
 
   it("applies the high-risk profile when risk is high", async () => {

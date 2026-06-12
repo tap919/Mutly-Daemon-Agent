@@ -1,6 +1,10 @@
 /**
  * PipelineRunner — orchestrates the Build Pipeline state machine via the multi-agent coordinator.
  *
+ * WARNING: This is one of two orchestration paths in the system.
+ * The other path is server/buildPipeline/orchestrator.ts (direct DAG execution).
+ * These paths have divergent behavior — see server.ts for which endpoints use which path.
+ *
  * Each phase is delegated to a specialized agent. The coordinator handles
  * agent lifecycle, message passing, and concurrency. This refactor:
  *
@@ -14,6 +18,7 @@
  */
 
 import { createPipelineState, PipelineState, PhaseId, PhaseResult } from "./pipelineTypes.js";
+import { logger } from "../lib/logger.js";
 import { PipelineStore, WorkflowBudgetStore } from "../lib/stateStore.js";
 import { AgentMessageBus } from "../agents/agentMessageBus.js";
 import { AgentCoordinator, createDefaultCoordinator } from "../agents/agentRegistry.js";
@@ -148,7 +153,7 @@ export class PipelineRunner {
       workspacePath: state.workspacePath,
       previousResults,
       messageBus: this.bus,
-      log: (level, msg) => console[level === "error" ? "error" : "log"](`[${agentName}] ${msg}`),
+      log: (level, msg) => { if (level === "error") logger.error(`[${agentName}] ${msg}`); else logger.info(`[${agentName}] ${msg}`); },
     };
 
     // Content-hash cache: skip re-auditing unchanged files
@@ -268,7 +273,8 @@ export class PipelineRunner {
       if (cur?.status === "failed") break;
       try {
         await this.runPhase(pipelineId, phaseId);
-      } catch {
+      } catch (err) {
+        logger.error({ phaseId, err }, "[pipeline] Phase failed, stopping pipeline");
         break;
       }
     }
@@ -305,7 +311,8 @@ export class PipelineRunner {
           await this.runPhase(pipelineId, "build");
           await this.runPhase(pipelineId, "review");
         }
-      } catch {
+      } catch (err) {
+        logger.error({ attempt, err }, "[pipeline] Iterate phase failed, stopping pipeline");
         break;
       }
     }

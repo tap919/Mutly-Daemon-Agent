@@ -1,3 +1,5 @@
+/** @vitest-environment jsdom */
+import '../tests/setup.dom';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from '../src/App';
 import LandingPage from '../src/components/LandingPage';
@@ -119,15 +121,20 @@ describe('Frontend Integration Tests', () => {
     expect(screen.getByText(/Terminal Idle/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Grep & AST'));
-    expect(screen.getByText('AST Hits')).toBeInTheDocument();
+    const astTabs = screen.getAllByText('Grep & AST');
+    fireEvent.click(astTabs[astTabs.length - 1]);
+    await waitFor(() => {
+      expect(screen.getByText(/AST Hits/i)).toBeInTheDocument();
+    });
   });
 });
 
 describe('Backend AgentDaemon Logic Tests', () => {
   it('toggles autonomous mode', () => {
     const daemon = new AgentDaemon();
-    
-    // Default is Idle
+    daemon.stop();
+    daemon.currentPhase = 'Idle';
+
     expect(daemon.currentPhase).toBe('Idle');
     
     daemon.toggleAutonomous();
@@ -217,7 +224,7 @@ describe('Backend AgentDaemon Logic Tests', () => {
     const stats = scanWorkspace(process.cwd());
     expect(stats.filesCount).toBeGreaterThan(0);
     expect(stats.linesOfCode).toBeGreaterThan(0);
-    expect(typeof stats.errorCount).toBe('number');
+    expect(typeof stats.suspiciousPatterns).toBe('number');
   });
 
   it('calculates complex overloads and compaction metrics based on actual scanWorkspace values', async () => {

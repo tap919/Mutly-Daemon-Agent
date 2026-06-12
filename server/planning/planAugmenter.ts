@@ -1,6 +1,7 @@
-import type { ExecutionPlan } from "../src/types.js";
-import { callVibeServeTool } from "../tools/mcp/mcpVibeServeClient.js";
+import type { ExecutionPlan } from "../../src/types.js";
+import { callVibeServeTool, type DaemonLogger } from "../tools/mcp/mcpVibeServeClient.js";
 import { parseArtifact, normalizeArtifactForModel, type NormalizedArtifact } from "./artifactNormalizer.js";
+import { LOG_TYPE } from "../lib/constants.js";
 
 export interface PlanAugmentationConfig {
   enabled: boolean;
@@ -26,7 +27,7 @@ export interface AugmentationResult {
 
 export async function augmentPlan(
   plan: ExecutionPlan,
-  daemon: { addLog: (type: string, msg: string) => void }
+  daemon: DaemonLogger
 ): Promise<AugmentationResult> {
   const config = getAugmentationConfig();
 
@@ -39,7 +40,7 @@ export async function augmentPlan(
   try {
     const planJson = JSON.stringify({
       message: plan.message,
-      tree: plan.tree.map(t => ({
+      tree: plan.tree.map((t: any) => ({
         id: t.id,
         step: t.step,
         risk: t.risk,
@@ -50,7 +51,7 @@ export async function augmentPlan(
     const result = await callVibeServeTool("vs_plan_review", { plan: planJson }, daemon);
 
     if (result.error) {
-      daemon.addLog("error", `PLAN_AUGMENT_FAILURE: ${result.error}`);
+      daemon.addLog(LOG_TYPE.ERROR, `PLAN_AUGMENT_FAILURE: ${result.error}`);
       return { success: false, errors: [String(result.error)] };
     }
 
@@ -62,15 +63,15 @@ export async function augmentPlan(
 
     const normalized = normalizeArtifactForModel(artifact);
 
-    daemon.addLog("success", `PLAN_AUGMENT_SUCCESS: Type=${artifact.artifactType}`);
+    daemon.addLog(LOG_TYPE.SUCCESS, `PLAN_AUGMENT_SUCCESS: Type=${artifact.artifactType}`);
     return {
       success: true,
       artifact,
-      critique: normalized.validationErrors,
-      recommendations: normalized.recommendations
+      critique: normalized.validationErrors as string[] | undefined,
+      recommendations: normalized.recommendations as string[] | undefined
     };
   } catch (err: any) {
-    daemon.addLog("error", `PLAN_AUGMENT_ERROR: ${err.message}`);
+    daemon.addLog(LOG_TYPE.ERROR, `PLAN_AUGMENT_ERROR: ${err.message}`);
     return { success: false, errors: [err.message] };
   }
 }
@@ -92,7 +93,7 @@ export async function generateArtifact(
     const result = await callVibeServeTool("vs_generate_artifact", { prompt, artifactType }, daemon);
 
     if (result.error) {
-      daemon.addLog("error", `ARTIFACT_GENERATE_FAILURE: ${result.error}`);
+      daemon.addLog(LOG_TYPE.ERROR, `ARTIFACT_GENERATE_FAILURE: ${result.error}`);
       return { success: false, errors: [String(result.error)] };
     }
 
@@ -104,14 +105,14 @@ export async function generateArtifact(
 
     const normalized = normalizeArtifactForModel(artifact);
 
-    daemon.addLog("success", `ARTIFACT_GENERATE_SUCCESS: Type=${artifact.artifactType}`);
+    daemon.addLog(LOG_TYPE.SUCCESS, `ARTIFACT_GENERATE_SUCCESS: Type=${artifact.artifactType}`);
     return {
       success: true,
       artifact,
-      recommendations: normalized.recommendations
+      recommendations: normalized.recommendations as string[] | undefined
     };
   } catch (err: any) {
-    daemon.addLog("error", `ARTIFACT_GENERATE_ERROR: ${err.message}`);
+    daemon.addLog(LOG_TYPE.ERROR, `ARTIFACT_GENERATE_ERROR: ${err.message}`);
     return { success: false, errors: [err.message] };
   }
 }

@@ -31,6 +31,21 @@ export interface StepResult {
   bytesRemoved?: number;
 }
 
+export function backupFile(filePath: string, workspaceRoot: string): boolean {
+  const full = path.resolve(workspaceRoot, filePath);
+  if (!fs.existsSync(full)) return false;
+  fs.copyFileSync(full, full + ".bak");
+  return true;
+}
+
+export function restoreFile(filePath: string, workspaceRoot: string): void {
+  const full = path.resolve(workspaceRoot, filePath);
+  const bak = full + ".bak";
+  if (fs.existsSync(bak)) {
+    fs.renameSync(bak, full);
+  }
+}
+
 export async function executeBuildStep(
   step: BuildStep,
   ctx: StepContext

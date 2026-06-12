@@ -20,8 +20,11 @@
 import { readdirSync, statSync, readFileSync, existsSync } from "fs";
 import { join, resolve, basename, extname } from "path";
 import { logger } from "../lib/logger.js";
+import { LOG_TYPE } from "../lib/constants.js";
 import { Skill, SkillContext, SkillResult } from "./skillBase.js";
 import { randomUUID } from "crypto";
+import { withSkillSpan } from "../observability/skillSpan.js";
+import type { Tracer } from "@opentelemetry/api";
 
 export interface SkillManifest {
   /** Path where the skill was loaded from */
@@ -47,11 +50,22 @@ export class SkillRegistry {
   private tools = new Map<string, Set<string>>(); // tool name → skill names
   private traceId: string;
   private autoLoadDir: string | null = null;
+  private tracer: any = null;
 
   constructor(opts: RegistryOptions = {}) {
     this.traceId = opts.traceId ?? `trace_${randomUUID().slice(0, 8)}`;
     if (opts.autoLoadDir) {
       this.autoLoadDir = opts.autoLoadDir;
+    }
+    this.initTracer();
+  }
+
+  private initTracer(): void {
+    try {
+      const api = require("@opentelemetry/api");
+      this.tracer = api.trace.getTracer("mutly-daemon");
+    } catch {
+      // OTel not available — spans will be no-op
     }
   }
 
@@ -278,8 +292,8 @@ export class SkillRegistry {
       workspacePath: overrides.workspacePath ?? null,
       traceId: overrides.traceId ?? this.traceId,
       log: (level: string, msg: string) => {
-        if (level === "error") logger.error(`[skill:${name}] ${msg}`);
-        else if (level === "warn") logger.warn(`[skill:${name}] ${msg}`);
+        if (level === LOG_TYPE.ERROR) logger.error(`[skill:${name}] ${msg}`);
+        else if (level === LOG_TYPE.WARNING) logger.warn(`[skill:${name}] ${msg}`);
         else logger.info(`[skill:${name}] ${msg}`);
       },
       callSkill: async <T = unknown>(n: string, i: Record<string, unknown>) => {
@@ -288,6 +302,20 @@ export class SkillRegistry {
       },
     };
 
+    // Use OTel span for skill execution if tracer is available
+    if (this.tracer) {
+      return withSkillSpan(this.tracer, { name, version: manifest.skill.metadata.version, tools: skill.tools }, async () => {
+        const startMs = Date.now();
+        try {
+          const result = await skill.execute(input, ctx);
+          return { ...result, durationMs: result.durationMs || (Date.now() - startMs) } as SkillResult<T>;
+        } catch (err: any) {
+          return { success: false, error: err.message ?? String(err), durationMs: Date.now() - startMs };
+        }
+      });
+    }
+
+    // Fallback without OTel span
     const startMs = Date.now();
     try {
       const result = await skill.execute(input, ctx);

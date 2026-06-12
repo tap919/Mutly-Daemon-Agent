@@ -91,7 +91,18 @@ export function sortWithWaves(nodes: DagNode[]): TopoResult {
 
   if (order.length !== nodes.length) {
     const stuck = nodes.find((n) => (inDegree.get(n.id) ?? 0) > 0);
-    throw new CycleError(stuck ? [stuck.id, ...(stuck.dependsOn as string[])] : ["unknown"]);
+    const cycle: string[] = [];
+    const visited = new Set<string>();
+    let current = stuck?.id;
+    while (current && !visited.has(current)) {
+      const cur = current;
+      visited.add(cur);
+      cycle.push(cur);
+      const next = nodes.find(n => n.dependsOn.includes(cur) && !visited.has(n.id));
+      current = next?.id;
+    }
+    if (stuck) cycle.push(stuck.id);
+    throw new CycleError(cycle);
   }
 
   return { order, waves };

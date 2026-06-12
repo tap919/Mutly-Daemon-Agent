@@ -37,11 +37,12 @@ import { workflowHash, stamp, type Provenance } from "./provenance.js";
 import { monitorAgentResult } from "./agentGuards.js";
 import { ReporankApiClient } from "../audit/reporankApiClient.js";
 import { logger } from "../lib/logger.js";
+import { runPipelineDag, buildPipelineDag, type PipelineHooks } from "./orchestratorDag.js";
 
-const REPORANK_TIMEOUT_MS = 5000;
-const REPORANK_MAX_FILES = 50;
-const REPORANK_MAX_CONTENT = 30000;
-const REPORANK_MAX_DEPTH = 10;
+const REPORANK_TIMEOUT_MS = parseInt(process.env.REPORANK_TIMEOUT_MS || "5000", 10);
+const REPORANK_MAX_FILES = parseInt(process.env.REPORANK_MAX_FILES || "50", 10);
+const REPORANK_MAX_CONTENT = parseInt(process.env.REPORANK_MAX_CONTENT || "30000", 10);
+const REPORANK_MAX_DEPTH = parseInt(process.env.REPORANK_MAX_DEPTH || "10", 10);
 const REPORANK_SOURCE_EXTS = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs",
   ".java", ".rb", ".php", ".vue", ".svelte",
@@ -247,6 +248,17 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
   loop.subscribe((e) => {
     if (e.type === "transition" || e.type === "terminal") {
       events.push({ from: e.from, to: e.to, ts: e.ts, signal: e.signal });
+      if (e.type === "transition") {
+        logger.info(
+          { component: "RalphLoop", from: e.from, to: e.to, iteration: e.iteration, message: e.message },
+          `[RalphLoop] state ${e.from ?? "∅"} → ${e.to}${e.message ? ` (${e.message})` : ""}`
+        );
+      } else if (e.type === "terminal") {
+        logger.info(
+          { component: "RalphLoop", to: e.to, signal: e.signal, message: e.message },
+          `[RalphLoop] terminal signal ${e.signal} (state=${e.to}, message=${e.message ?? "n/a"})`
+        );
+      }
     }
   });
 
@@ -262,76 +274,32 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
     return finalize(t0, state, config, profile, loop, drift, commits, null, events);
   }
 
-  // ── 4. INGEST + AUDIT + PLAN (skipped if prePlan given) ──
-  // Always walk INGEST → AUDIT → PLAN so the FSM is well-formed in both
-  // prePlan and headless modes.  The prePlan case just sets a richer
-  // plan output when we reach PLAN.
-  loop.transition("INGEST", { message: opts.prePlan ? "ingesting workspace" : "phase not executed in headless mode (no prePlan provided)" });
-  const baselineGrade = await runReporankGrade(opts.workspaceRoot, "baseline");
-  state.phases.ingest = {
-    id: "ingest", status: "passed",
-    output: {
-      workspacePath: opts.workspaceRoot,
-      note: opts.prePlan ? "ingest via prePlan" : "phase not executed in headless mode (no prePlan provided)",
-      reporankBaseline: baselineGrade,
-    },
-  } as any;
-
-  loop.transition("AUDIT", { message: opts.prePlan ? "RepoRank audit scan" : "phase not executed in headless mode (no prePlan provided)" });
-  const auditGrade = await runReporankGrade(opts.workspaceRoot, "audit");
-  state.phases.audit = {
-    id: "audit", status: "passed",
-    output: { issues: [], reporankResult: auditGrade },
-  } as any;
-
-  if (opts.prePlan) {
-    const planProv = stamp({ tree: opts.prePlan.tree }, provenanceFor("ai", profile.model, `plan-from-options`, wfHash));
-    state.phases.plan = {
-      id: "plan", status: "passed", output: { plan: { tree: opts.prePlan.tree } }, _provenance: planProv,
-    } as any;
-    state.iterationCount = 0;
-    loop.ok("PLAN", { message: "plan injected from options" });
-  } else {
-    loop.transition("PLAN", { message: "phase not executed in headless mode (no prePlan provided)" });
-    state.phases.plan = { id: "plan", status: "passed", output: { plan: { tree: [] } } } as any;
-  }
-
-  // ── 5. BUILD with gating + drift + auto-commit ───────────
-  const buildCtx: BuildContext = {
+  // ── 4. INGEST + AUDIT + PLAN + BUILD + REVIEW + READY ──
+  // Phases are executed via runPipelineDag (the DAG-based executor) which
+  // handles dependency ordering and parallel waves. The RalphLoop transitions
+  // and drift/iterate/repoRank logic below still drive higher-level control.
+  const dagResult = await runPipelineDag({
     workspaceRoot: opts.workspaceRoot,
-    onStepApplied: async (step, result) => {
-      if (!opts.noCommit) {
-        const c = await createAutoCommitHook({
-          workspaceRoot: opts.workspaceRoot,
-          pipelineId: opts.pipelineId ?? state.id,
-        })(step, result);
-        commits.push(c);
-      }
-    },
-  };
-  loop.transition("BUILD", { message: "starting build phase" });
-  let buildResult: PhaseResult;
-  try {
-    buildResult = await p4_build(state, buildCtx);
-  } catch (e) {
-    loop.fail(`build crashed: ${e instanceof Error ? e.message : String(e)}`);
-    return finalize(t0, state, config, profile, loop, drift, commits, null, events);
-  }
-  state.phases.build = buildResult;
-  if (buildResult.status === "failed") {
-    loop.fail(`build phase reported failure`);
+    pipelineId: opts.pipelineId ?? state.id,
+    hooks: createPipelineHooks({
+      state, config, profile, loop, drift, opts, wfHash, commits,
+    }),
+  });
+
+  // Surface DAG errors as orchestrator failures (mirror original fail-fast).
+  if (dagResult.status === "failed") {
+    const firstError = [...dagResult.errors.values()][0];
+    loop.fail(`dag phase failed: ${firstError?.message ?? "unknown"}`);
     return finalize(t0, state, config, profile, loop, drift, commits, null, events);
   }
 
-  // ── 6. Drift computation (build.actual vs estimated) ─────
-  const bo = buildResult.output as any;
+  // ── 5. Drift computation (build.actual vs estimated) ─────
+  const bo = state.phases.build?.output as any;
   const steps = (bo?.steps ?? []) as Array<{ status: string; bytesAdded?: number; bytesRemoved?: number }>;
   const succeeded = steps.filter((s) => s.status === "passed").length;
   const totalBytes = (bo?.bytesAdded ?? 0) + (bo?.bytesRemoved ?? 0);
   const planTree = (state.phases.plan as any)?.output?.plan?.tree ?? [];
   const estimatedSteps = Array.isArray(planTree) ? planTree.length : 0;
-  // Only estimate bytes from steps * 100 when we have no real estimate,
-  // but pass 0 so buildPhaseDrift skips the bytes sample.
   const hasRealEstimate = false;
   for (const s of buildPhaseDrift({
     estimatedFiles: estimatedSteps,
@@ -342,39 +310,34 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
     drift.record(s);
   }
   const driftReport = drift.report(config);
-  // Gating: a 'halt' or 'reeval' drift level fails the build
   if (driftReport.level === "halt" || driftReport.level === "reeval") {
     loop.fail(`drift ${driftReport.level} (max=${driftReport.max.toFixed(2)} >= threshold ${driftReport.threshold})`);
     return finalize(t0, state, config, profile, loop, drift, commits, null, events, driftReport);
   }
 
-  // ── 7. REVIEW (monitor) + decide iterate vs ready ────────
-  loop.transition("REVIEW", { message: "build review" });
-  const buildOutput = buildResult.output as any;
-  const reviewVerdict = monitorAgentResult({
-    claim: `Build complete: ${succeeded}/${steps.length} steps passed, +${bo?.bytesAdded ?? 0}/-${bo?.bytesRemoved ?? 0}B`,
-    filesChanged: steps.flatMap((s: any) => s.filePath ? [s.filePath] : []),
-    workspaceRoot: opts.workspaceRoot,
-    history: [],
-  });
-  if (!reviewVerdict.ok) {
-    loop.fail(`quality-monitor rejected build: ${reviewVerdict.reason}`);
-    return finalize(t0, state, config, profile, loop, drift, commits, null, events, driftReport);
-  }
-  state.phases.review = { id: "review", status: "passed", output: { warnings: reviewVerdict.warnings } } as any;
-
-  // ── 8. ITERATE loop (max_iterations) ────────────────────
-  const shouldIterate = steps.some((s) => s.status !== "passed");
+  // ── 6. ITERATE loop (max_iterations) ────────────────────
   const canIterate = loop.iteration < config.max_iterations;
+  const shouldIterate = steps.some((s) => s.status !== "passed");
   const nextState = loop.nextAfterReview({ shouldIterate, canIterate });
   loop.transition(nextState, { message: `next=${nextState} (iter=${loop.iteration}, max=${config.max_iterations})` });
 
+  // NOTE: The iterate phase calls p4_build directly rather than routing through
+  // the agent coordinator. This means iterate steps don't benefit from agent
+  // timeouts, retries, or concurrency control. Consider unifying on the coordinator.
   if (nextState === "ITERATE") {
-    // For the headless orchestrator, iterate simply means "we have more to do" —
-    // we re-run the build phase with the existing plan. (A full implementation
-    // would invoke the iterate phase agent for delta planning.)
     for (let i = 0; i < config.max_iterations - loop.iteration; i++) {
-      const itBuild = await p4_build(state, buildCtx);
+      const itBuild = await p4_build(state, {
+        workspaceRoot: opts.workspaceRoot,
+        onStepApplied: async (step, result) => {
+          if (!opts.noCommit) {
+            const c = await createAutoCommitHook({
+              workspaceRoot: opts.workspaceRoot,
+              pipelineId: opts.pipelineId ?? state.id,
+            })(step, result);
+            commits.push(c);
+          }
+        },
+      });
       state.phases.build = itBuild;
       const itBo = itBuild.output as any;
       const itSteps = (itBo?.steps ?? []) as Array<{ status: string }>;
@@ -387,10 +350,7 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
     loop.transition("READY", { message: "iterate loop exhausted; proceeding to ready" });
   }
 
-  // ── RepoRank BUILD + FINAL scans ────────────────────────
-  // Done after the iteration loop so the build grade reflects the final
-  // state of the workspace, and so we don't lose the grade to a build
-  // overwrite inside the ITERATE branch.
+  // ── 7. RepoRank BUILD + FINAL scans ─────────────────────
   const buildGrade = await runReporankGrade(opts.workspaceRoot, "build");
   state.phases.build = {
     ...state.phases.build,
@@ -403,12 +363,10 @@ export async function runPipeline(opts: OrchestratorOptions): Promise<Orchestrat
     output: { ...(state.phases.review.output ?? {}), reporankResult: finalGrade },
   } as any;
 
-  // ── 9. READY → DONE ─────────────────────────────────────
-  // Avoid double-transition: nextAfterReview may already have set READY.
+  // ── 8. READY → DONE ─────────────────────────────────────
   if (loop.state !== "READY") {
     loop.transition("READY", { message: "ready for deployment" });
   }
-  state.phases.ready = { id: "ready", status: "passed", output: { ready: true } } as any;
   loop.transition("DONE", { message: "pipeline complete" });
 
   const finalDrift = drift.report(config);
@@ -468,7 +426,140 @@ function provenanceFor(origin: "human" | "ai" | "mixed", model: string | null, n
 
 /** Convenience for callers: parse a file path and return the orchestrator's verdict. */
 export async function runHeadlessBuild(workspaceRoot: string, prePlan?: { tree: unknown[] }): Promise<OrchestratorResult> {
-  return runPipeline({ workspaceRoot, prePlan });
+  const result = await runPipeline({ workspaceRoot, prePlan });
+
+  if (result.loop.iteration === 0 && !prePlan) {
+    logger.info("[orchestrator] No prePlan provided and 0 iterations — running default heuristic audit");
+    const files = collectReporankSourceFiles(workspaceRoot);
+    logger.info(
+      { workspaceRoot, fileCount: files.length },
+      `[orchestrator] Heuristic scan: ${files.length} source files collected for default audit`
+    );
+    const findings = files.map((f) => ({ title: f.path, message: `${f.content.length} chars` }));
+    logger.info({ findings: findings.slice(0, 10) }, "[orchestrator] Default audit findings (first 10)");
+    const defaultGrade: ReporankGrade = {
+      label: "heuristic-fallback",
+      score: files.length > 0 ? 50 : null,
+      gradeCategory: "warning",
+      maturityLevel: "developing",
+      summary: `Default heuristic audit: ${files.length} source file(s) scanned without a workflow plan`,
+      findings: [],
+      recommendations: ["Provide a WORKFLOW.md or prePlan for full pipeline execution"],
+      completedAt: Date.now(),
+      filesScanned: files.length,
+    };
+    return { ...result, reporankGrades: { ...result.reporankGrades, final: defaultGrade } };
+  }
+
+  return result;
+}
+
+/**
+ * Create the 6 phase hooks (ingest, audit, plan, build, review, ready) that
+ * the DAG executor invokes. Each hook updates `state` and emits RalphLoop
+ * transitions, preserving the original linear execution semantics inside the
+ * DAG-based runner.
+ */
+function createPipelineHooks(ctx: {
+  state: PipelineState;
+  config: WorkflowConfig;
+  profile: ScopeProfile;
+  loop: RalphLoop;
+  drift: DriftTracker;
+  opts: OrchestratorOptions;
+  wfHash: string;
+  commits: OrchestratorResult["commits"];
+}): PipelineHooks {
+  const { state, profile, loop, opts, wfHash, commits } = ctx;
+  return {
+    ingest: async () => {
+      loop.transition("INGEST", { message: opts.prePlan ? "ingesting workspace" : "phase not executed in headless mode (no prePlan provided)" });
+      const baselineGrade = await runReporankGrade(opts.workspaceRoot, "baseline");
+      state.phases.ingest = {
+        id: "ingest", status: "passed",
+        output: {
+          workspacePath: opts.workspaceRoot,
+          note: opts.prePlan ? "ingest via prePlan" : "phase not executed in headless mode (no prePlan provided)",
+          reporankBaseline: baselineGrade,
+        },
+      } as any;
+      return state.phases.ingest.output;
+    },
+    audit: async () => {
+      loop.transition("AUDIT", { message: opts.prePlan ? "RepoRank audit scan" : "phase not executed in headless mode (no prePlan provided)" });
+      const auditGrade = await runReporankGrade(opts.workspaceRoot, "audit");
+      state.phases.audit = {
+        id: "audit", status: "passed",
+        output: { issues: [], reporankResult: auditGrade },
+      } as any;
+      return state.phases.audit.output;
+    },
+    plan: async () => {
+      if (opts.prePlan) {
+        const planProv = stamp({ tree: opts.prePlan.tree }, provenanceFor("ai", profile.model, `plan-from-options`, wfHash));
+        state.phases.plan = {
+          id: "plan", status: "passed", output: { plan: { tree: opts.prePlan.tree } }, _provenance: planProv,
+        } as any;
+        state.iterationCount = 0;
+        loop.ok("PLAN", { message: "plan injected from options" });
+      } else {
+        loop.transition("PLAN", { message: "phase not executed in headless mode (no prePlan provided)" });
+        state.phases.plan = { id: "plan", status: "passed", output: { plan: { tree: [] } } } as any;
+      }
+      return state.phases.plan.output;
+    },
+    build: async () => {
+      const planTree = (state.phases.plan?.output as any)?.plan?.tree ?? [];
+      if (!planTree.length) {
+        logger.info("[orchestrator] Plan has no steps — skipping BUILD phase");
+        loop.transition("BUILD", { message: "no steps to execute, skipping" });
+        return { skipped: true, reason: "No actionable issues found in scan", steps: [] };
+      }
+      const buildCtx: BuildContext = {
+        workspaceRoot: opts.workspaceRoot,
+        onStepApplied: async (step, result) => {
+          if (!opts.noCommit) {
+            const c = await createAutoCommitHook({
+              workspaceRoot: opts.workspaceRoot,
+              pipelineId: opts.pipelineId ?? state.id,
+            })(step, result);
+            commits.push(c);
+          }
+        },
+      };
+      loop.transition("BUILD", { message: "starting build phase" });
+      const buildResult = await p4_build(state, buildCtx);
+      state.phases.build = buildResult;
+      if (buildResult.status === "failed") {
+        throw new Error(`build phase reported failure`);
+      }
+      return buildResult.output;
+    },
+    review: async () => {
+      loop.transition("REVIEW", { message: "build review" });
+      const buildOutput = state.phases.build?.output as any;
+      const reviewSteps = (buildOutput?.steps ?? []) as Array<{ status: string; bytesAdded?: number; bytesRemoved?: number; filePath?: string }>;
+      const reviewSucceeded = reviewSteps.filter((s) => s.status === "passed").length;
+      const reviewVerdict = monitorAgentResult({
+        claim: `Build complete: ${reviewSucceeded}/${reviewSteps.length} steps passed, +${buildOutput?.bytesAdded ?? 0}/-${buildOutput?.bytesRemoved ?? 0}B`,
+        filesChanged: reviewSteps.flatMap((s) => s.filePath ? [s.filePath] : []),
+        workspaceRoot: opts.workspaceRoot,
+        history: [],
+      });
+      if (!reviewVerdict.ok) {
+        throw new Error(`quality-monitor rejected build: ${reviewVerdict.reason}`);
+      }
+      state.phases.review = { id: "review", status: "passed", output: { warnings: reviewVerdict.warnings } } as any;
+      return state.phases.review.output;
+    },
+    ready: async () => {
+      // Do not transition to READY here — the orchestrator code (post-DAG)
+      // owns the final READY → DONE transitions. Setting phase output is
+      // all the DAG-level ready hook should do.
+      state.phases.ready = { id: "ready", status: "passed", output: { ready: true } } as any;
+      return state.phases.ready.output;
+    },
+  };
 }
 
 // re-export

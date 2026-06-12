@@ -14,7 +14,7 @@
  * render a meaningful summary without re-scanning the workspace.
  */
 import { PipelineState, PhaseResult, isStructuredBuildStep, type BuildStep } from "./pipelineTypes.js";
-import { executeBuildStep, type StepContext, type StepResult as FsStepResult } from "./fileStepExecutor.js";
+import { executeBuildStep, backupFile, restoreFile, type StepContext, type StepResult as FsStepResult } from "./fileStepExecutor.js";
 import { callVibeServeTool, isVibeServeEnabled } from "../tools/mcp/mcpVibeServeClient.js";
 import path from "path";
 import fs from "fs";
@@ -27,6 +27,86 @@ export interface BuildContext extends StepContext {
    * Sprint A.4 uses this for git auto-commit.
    */
   onStepApplied?: (step: BuildStep, result: FsStepResult) => void | Promise<void>;
+}
+
+async function executeGroupAtomically(
+  group: Array<BuildStep>,
+  ctx: BuildContext,
+  workspaceRoot: string
+): Promise<{
+  stepResults: Array<{
+    id: string;
+    status: "passed" | "failed" | "skipped";
+    durationMs: number;
+    action?: string;
+    filePath?: string;
+    error?: string;
+    bytesAdded?: number;
+    bytesRemoved?: number;
+  }>;
+  bytesAdded: number;
+  bytesRemoved: number;
+  hasFailure: boolean;
+}> {
+  const stepResults: Array<{
+    id: string;
+    status: "passed" | "failed" | "skipped";
+    durationMs: number;
+    action?: string;
+    filePath?: string;
+    error?: string;
+    bytesAdded?: number;
+    bytesRemoved?: number;
+  }> = [];
+  let totalBytesAdded = 0;
+  let totalBytesRemoved = 0;
+  let hasFailure = false;
+
+  // Backup all files in the group before making changes
+  for (const step of group) {
+    backupFile(step.filePath, workspaceRoot);
+  }
+
+  // Apply all steps in the group
+  for (const step of group) {
+    const stepT0 = performance.now();
+    const result = await executeBuildStep(step, ctx);
+    const durationMs = performance.now() - stepT0;
+
+    if (result.success) {
+      totalBytesAdded += result.bytesAdded ?? 0;
+      totalBytesRemoved += result.bytesRemoved ?? 0;
+      stepResults.push({
+        id: step.id,
+        status: "passed",
+        durationMs,
+        action: step.action,
+        filePath: result.filePath,
+        bytesAdded: result.bytesAdded,
+        bytesRemoved: result.bytesRemoved,
+      });
+      if (ctx.onStepApplied) {
+        try { await ctx.onStepApplied(step, result); } catch {}
+      }
+    } else {
+      // Rollback: restore all files in the group
+      for (const s of group) {
+        restoreFile(s.filePath, workspaceRoot);
+      }
+      hasFailure = true;
+      stepResults.push({
+        id: step.id,
+        status: "failed",
+        durationMs,
+        action: step.action,
+        filePath: result.filePath,
+        error: `Group rolled back after failure: ${result.error}`,
+      });
+      break;
+    }
+  }
+
+  return { stepResults, bytesAdded: totalBytesAdded, bytesRemoved: totalBytesRemoved, hasFailure };
 }
 
 export async function p4_build(state: PipelineState, ctx: BuildContext): Promise<PhaseResult> {
@@ -53,6 +133,77 @@ export async function p4_build(state: PipelineState, ctx: BuildContext): Promise
   // Use state.workspacePath as fallback if ctx.workspaceRoot is unset.
   const workspaceRoot = ctx.workspaceRoot || state.workspacePath || process.cwd();
   const enrichedCtx: BuildContext = { ...ctx, workspaceRoot };
+
+  // Detect grouped steps for atomic execution
+  const rawGroups = (raw as { groups?: Array<unknown> }).groups;
+  if (rawGroups && Array.isArray(rawGroups) && rawGroups.length > 0) {
+    const stepResults: Array<{
+      id: string;
+      status: "passed" | "failed" | "skipped";
+      durationMs: number;
+      action?: string;
+      filePath?: string;
+      error?: string;
+      bytesAdded?: number;
+      bytesRemoved?: number;
+    }> = [];
+    let totalBytesAdded = 0;
+    let totalBytesRemoved = 0;
+    let hasFailure = false;
+
+    for (const rawGroup of rawGroups) {
+      if (!Array.isArray(rawGroup)) continue;
+      const grp = rawGroup as Array<Record<string, unknown>>;
+      const structuredSteps = grp.filter((s) => isStructuredBuildStep(s)) as BuildStep[];
+      if (structuredSteps.length === 0) {
+        for (const step of grp) {
+          stepResults.push({
+            id: String(step.id ?? ""),
+            status: "skipped",
+            durationMs: 0,
+            error: "No structured steps in group",
+          });
+        }
+        continue;
+      }
+
+      const groupResult = await executeGroupAtomically(
+        structuredSteps,
+        enrichedCtx,
+        workspaceRoot
+      );
+      stepResults.push(...groupResult.stepResults);
+      totalBytesAdded += groupResult.bytesAdded;
+      totalBytesRemoved += groupResult.bytesRemoved;
+      if (groupResult.hasFailure) {
+        hasFailure = true;
+        break;
+      }
+    }
+
+    const passed = stepResults.filter((s) => s.status === "passed").length;
+    const failed = stepResults.filter((s) => s.status === "failed").length;
+    const skipped = stepResults.filter((s) => s.status === "skipped").length;
+
+    return {
+      id: "build",
+      status: hasFailure ? "failed" : "passed",
+      output: {
+        steps: stepResults,
+        totalSteps: stepResults.length,
+        passed,
+        failed,
+        skipped,
+        bytesAdded: totalBytesAdded,
+        bytesRemoved: totalBytesRemoved,
+        message:
+          `Executed ${stepResults.length} step(s) in ${rawGroups.length} group(s): ${passed} passed, ${failed} failed, ${skipped} skipped. ` +
+          `Net change: +${totalBytesAdded}B / -${totalBytesRemoved}B.`,
+      },
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+    };
+  }
 
   const stepResults: Array<{
     id: string;

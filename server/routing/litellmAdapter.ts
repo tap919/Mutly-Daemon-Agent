@@ -11,12 +11,77 @@
  */
 import { GoogleGenAI } from "@google/genai";
 import { getConfig } from "../config.js";
+import { logger } from "../lib/logger.js";
 
 export interface LiteLLMResponse {
   text: string;
   model: string;
   usage: { promptTokens: number; completionTokens: number; totalTokens: number };
   provider: string;
+}
+
+export interface GenerateOptions {
+  model?: string;
+  system?: string;
+  maxTokens?: number;
+  temperature?: number;
+  stop?: string[];
+}
+
+export async function* generateStream(
+  prompt: string,
+  opts: GenerateOptions = {}
+): AsyncGenerator<string, void, unknown> {
+  const config = getConfig();
+  const model = opts.model || String(config.MUTLY_DEFAULT_MODEL) || "gemini-2.5-flash";
+  const maxTokens = opts.maxTokens || 8192;
+
+  try {
+    const { completion } = await import("litellm");
+    const stream = await completion({
+      model,
+      messages: [
+        ...(opts.system ? [{ role: "system" as const, content: opts.system }] : []),
+        { role: "user" as const, content: prompt },
+      ],
+      stream: true,
+      max_tokens: maxTokens,
+      temperature: opts.temperature ?? 0.7,
+      stop: opts.stop?.join(",") || null,
+    });
+
+    if (Symbol.asyncIterator in Object(stream)) {
+      for await (const chunk of stream as AsyncIterable<{ choices?: Array<{ delta?: { content?: string } }> }>) {
+        const text = chunk.choices?.[0]?.delta?.content || "";
+        if (text) yield text;
+      }
+      return;
+    }
+
+    const text = (stream as any)?.choices?.[0]?.message?.content || "";
+    if (text) yield text;
+    return;
+  } catch (e) {
+    logger.warn({ err: e }, "[generateStream] litellm streaming failed, trying Gemini fallback");
+  }
+
+  try {
+    const genai = new GoogleGenAI({ apiKey: String(config.GEMINI_API_KEY) });
+    const response = await genai.models.generateContentStream({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+    for await (const chunk of response) {
+      const text = chunk.text || "";
+      if (text) yield text;
+    }
+    return;
+  } catch (e) {
+    logger.warn({ err: e }, "[generateStream] Gemini streaming failed, falling back to non-streaming");
+  }
+
+  const fallback = await litellmAdapter.generate(prompt, opts);
+  if (fallback.text) yield fallback.text;
 }
 
 export class LiteLLMAdapter {
@@ -29,9 +94,9 @@ export class LiteLLMAdapter {
       import("litellm").then(m => {
         this.litellm = m;
         this.useLiteLLM = true;
-        console.log("[litellm] Loaded — multi-model routing enabled");
+        logger.info("[litellm] Loaded — multi-model routing enabled");
       }).catch(() => {
-        console.log("[litellm] Not installed — using Gemini GenAI fallback");
+        logger.info("[litellm] Not installed — using Gemini GenAI fallback");
       });
     } catch {}
 
@@ -85,7 +150,7 @@ export class LiteLLMAdapter {
           provider: "litellm",
         };
       } catch (e) {
-        console.warn("[litellm] Generation failed, trying fallback:", (e as Error).message);
+        logger.warn({ err: e }, "[litellm] Generation failed, trying fallback");
       }
     }
 

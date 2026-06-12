@@ -1,6 +1,7 @@
 import { execSync } from "child_process";
 import { getConfig } from "../config.js";
 import { litellmAdapter } from "./litellmAdapter.js";
+import { logger } from "../lib/logger.js";
 
 export interface OpenCodeResponse {
   text: string;
@@ -20,14 +21,14 @@ export class OpenCodeAdapter {
         encoding: "utf-8",
       });
       this.opencodePath = "npx opencode";
-      console.log("[opencode] CLI available — model routing enabled");
+      logger.info("[opencode] CLI available — model routing enabled");
     } catch {
       try {
         execSync("opencode --version 2>&1", { timeout: 5000, encoding: "utf-8" });
         this.opencodePath = "opencode";
-        console.log("[opencode] CLI available (global install)");
+        logger.info("[opencode] CLI available (global install)");
       } catch {
-        console.log("[opencode] Not available — falling back to LiteLLM/Gemini");
+        logger.warn("[opencode] Not available — falling back to LiteLLM/Gemini");
       }
     }
   }

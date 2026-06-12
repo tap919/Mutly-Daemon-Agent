@@ -9,8 +9,11 @@ import { makeLogger } from "./logger.js";
 import { buildCommand } from "./buildCommand.js";
 import { serveCommand } from "./serveCommand.js";
 import { helpCommand } from "./helpCommand.js";
+import { planCommand } from "./planCommand.js";
+import { convergeCommand } from "./convergeCommand.js";
+import { benchmarkCommand } from "./benchmarkCommand.js";
 
-const SUBCOMMANDS: Subcommand[] = [buildCommand, serveCommand, helpCommand];
+const SUBCOMMANDS: Subcommand[] = [buildCommand, serveCommand, planCommand, convergeCommand, benchmarkCommand, helpCommand];
 
 /**
  * Runs the CLI.

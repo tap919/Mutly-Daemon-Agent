@@ -37,6 +37,10 @@ export const buildCommand: Subcommand = {
     const noCommit = args.includes("--no-commit");
     const maxIter = args.find((a) => a.startsWith("--max-iterations="));
     const maxIterations = maxIter ? parseInt(maxIter.split("=")[1], 10) : undefined;
+    // NOTE: maxIterations is parsed but not forwarded — runHeadlessBuild / runPipeline
+    // derive max_iterations from the WorkflowConfig (loaded from WORKFLOW.md). To
+    // make --max-iterations effective, the orchestrator would need to accept an
+    // explicit override option that takes precedence over the config value.
 
     ctx.log.info(`Building ${workspaceRoot}${noCommit ? " [no-commit]" : ""}`);
 

@@ -17,6 +17,7 @@
  */
 import { createHash } from "crypto";
 import fs from "fs";
+import fsPromises from "fs/promises";
 import path from "path";
 
 export type ProvenanceOrigin = "human" | "ai" | "mixed";
@@ -33,7 +34,7 @@ export interface Provenance {
 }
 
 export function sha256(s: string): string {
-  return "sha256:" + createHash("sha256").update(s, "utf-8").digest("hex").slice(0, 16);
+  return "sha256:" + createHash("sha256").update(s, "utf-8").digest("hex");
 }
 
 /** Hash a file's contents (for snapshot diff comparisons). */
@@ -41,6 +42,16 @@ export function sha256File(filePath: string): string {
   if (!fs.existsSync(filePath)) return "sha256:missing";
   const content = fs.readFileSync(filePath, "utf-8");
   return sha256(content);
+}
+
+export async function sha256FileAsync(filePath: string): Promise<string> {
+  try {
+    await fsPromises.access(filePath);
+    const content = await fsPromises.readFile(filePath, "utf-8");
+    return sha256(content);
+  } catch {
+    return "sha256:missing";
+  }
 }
 
 /** Build a provenance object for an AI-authored artifact. */

@@ -18,13 +18,18 @@
  */
 
 import { BaseAgent, AgentTask, AgentResult, AgentContext } from "./agentBase.js";
+import { logger } from "../lib/logger.js";
 import { callVibeServeTool, isVibeServeEnabled } from "../tools/mcp/mcpVibeServeClient.js";
 import { isStructuredBuildStep, type BuildStep } from "../buildPipeline/pipelineTypes.js";
-import { executeBuildStep, type StepContext } from "../buildPipeline/fileStepExecutor.js";
+import { executeBuildStep, backupFile, restoreFile, type StepContext } from "../buildPipeline/fileStepExecutor.js";
 import { p4_build, type BuildContext } from "../buildPipeline/p4_build.js";
 import { createAutoCommitHook } from "../buildPipeline/autoCommit.js";
 import { litellmAdapter } from "../routing/litellmAdapter.js";
 import { getConfig } from "../config.js";
+import { injectContext } from "../memory/contextInjector.js";
+import { feedbackLearner } from "../memory/feedbackLearner.js";
+import { existsSync, readFileSync } from "fs";
+import { resolve } from "path";
 
 export class CodeAgent extends BaseAgent {
   readonly name = "code";
@@ -45,7 +50,7 @@ export class CodeAgent extends BaseAgent {
     const singleStep = task.input.step as Record<string, unknown> | undefined;
     const planSteps = task.input.steps as Array<Record<string, unknown>> | undefined;
 
-    console.error("[codeAgent] steps:", planSteps?.length ?? "none", "singleStep:", !!singleStep);
+    logger.error({ stepCount: planSteps?.length ?? "none", isSingleStep: !!singleStep }, "[codeAgent] steps");
 
     // Single structured step → apply directly.
     if (singleStep && isStructuredBuildStep(singleStep)) {
@@ -54,7 +59,7 @@ export class CodeAgent extends BaseAgent {
 
     // Multiple steps → delegate to p4_build for the full phase logic.
     if (planSteps && planSteps.length > 0) {
-      console.error("[codeAgent] delegating to p4_build via runPhase. plan output:", JSON.stringify(ctx.pipelineState.phases?.plan?.output).slice(0, 200));
+      logger.error({ planOutput: JSON.stringify(ctx.pipelineState.phases?.plan?.output).slice(0, 200) }, "[codeAgent] delegating to p4_build");
       return this.runPhase(ctx, startMs);
     }
 
@@ -63,7 +68,11 @@ export class CodeAgent extends BaseAgent {
       return this.recordLegacyStep(singleStep, ctx, startMs);
     }
 
-    return this.failure(task, "No step or steps provided in task input", Date.now() - startMs);
+    // No steps provided (plan found no actionable issues) — this is a valid success state
+    return this.success(task, {
+      skipped: true,
+      reason: "No actionable issues found in scan",
+    }, { durationMs: Date.now() - startMs });
   }
 
   /** Apply a single structured step to disk. */
@@ -79,32 +88,168 @@ export class CodeAgent extends BaseAgent {
       const config = getConfig();
       const model = config.MUTLY_DEFAULT_MODEL;
       try {
+        const baseSystem = "You are a code generation assistant. Generate clean, production-ready code.";
+        const systemPrompt = injectContext(ctx.workspacePath || process.cwd(), baseSystem);
+        const promptAugmentation = feedbackLearner.getPromptAugmentation("code_generation");
         const prompt = `Generate the content for file: ${step.filePath}\n\nStep description: ${step.description || step.id}`;
         const genResult = await litellmAdapter.generate(prompt, {
           model,
-          system: "You are a code generation assistant. Generate clean, production-ready code.",
+          system: systemPrompt + promptAugmentation,
           maxTokens: 4096,
         });
         step.content = genResult.text;
+        feedbackLearner.record({
+          taskType: "file_creation",
+          prompt,
+          result: genResult.text,
+          passed: true,
+          timestamp: Date.now(),
+        });
       } catch {
         ctx.log("warn", "litellm code generation failed, proceeding without content");
+        feedbackLearner.record({
+          taskType: "file_creation",
+          prompt: step.description || step.id,
+          result: "",
+          passed: false,
+          timestamp: Date.now(),
+        });
       }
     }
 
     const result = await executeBuildStep(step, stepCtx);
     if (!result.success) {
+      feedbackLearner.record({
+        taskType: step.action === "create_file" ? "file_creation" : "file_modification",
+        prompt: step.description || step.id,
+        result: step.action === "create_file" ? step.content : `diff: ${step.filePath}`,
+        passed: false,
+        testResults: result.error,
+        timestamp: Date.now(),
+      });
       return this.failure(
         { taskId: `step_${step.id}`, targetAgent: this.name, description: step.id, input: {}, createdAt: Date.now() },
         result.error ?? "Step failed",
         Date.now() - startMs
       );
     }
+    feedbackLearner.record({
+      taskType: step.action === "create_file" ? "file_creation" : "file_modification",
+      prompt: step.description || step.id,
+      result: step.action === "create_file" ? step.content : `diff: ${step.filePath}`,
+      passed: true,
+      timestamp: Date.now(),
+    });
     ctx.log("info", `Applied ${step.action} → ${result.filePath}`);
     return this.success(
       { taskId: `step_${step.id}`, targetAgent: this.name, description: step.id, input: {}, createdAt: Date.now() },
       { stepId: step.id, action: step.action, filePath: result.filePath, bytesAdded: result.bytesAdded, bytesRemoved: result.bytesRemoved },
       { durationMs: Date.now() - startMs, artifacts: [{ type: "file_change", location: result.filePath ?? step.filePath, description: step.action }] }
     );
+  }
+
+  /** Apply a group of dependent steps atomically with coordinated LLM generation. */
+  private async applyMultiStepAtomic(
+    steps: BuildStep[],
+    ctx: AgentContext,
+    startMs: number
+  ): Promise<AgentResult> {
+    const workspaceRoot = ctx.workspacePath ?? process.cwd();
+
+    // 1. Read all affected files for context
+    const files = steps.map((s) => {
+      const full = resolve(workspaceRoot, s.filePath);
+      return {
+        step: s,
+        path: full,
+        content: existsSync(full)
+          ? readFileSync(full, "utf-8").slice(0, 5000)
+          : "(new file)",
+      };
+    });
+
+    // 2. Backup all files before making changes
+    for (const f of files) {
+      if (f.content !== "(new file)") {
+        backupFile(f.step.filePath, workspaceRoot);
+      }
+    }
+
+    // 3. Generate coordinated changes in one LLM call
+    const prompt = `Modify the following files as specified. Output a JSON array of file operations.
+
+Files to modify:
+${files.map((f) => `### ${f.path}\n\`\`\`typescript\n${f.content}\n\`\`\``).join('\n\n')}
+
+Operations:
+${steps.map((s) => `- ${s.action}: ${s.filePath} — ${s.description ?? s.id}`).join('\n')}
+
+Return JSON: [{ "action": "create_file|apply_diff|delete_file", "filePath": "...", "content": "...", "findContent": "...", "replaceContent": "..." }]`;
+
+    try {
+      const result = await litellmAdapter.generate(prompt, {
+        maxTokens: 8192,
+        system: injectContext(ctx.workspacePath || process.cwd(), "You modify code files. Output valid JSON only. No markdown formatting.") +
+          feedbackLearner.getPromptAugmentation("file_modification"),
+      });
+
+      const jsonStr = result.text.replace(/```(?:json)?\s*|\s*```/g, "").trim();
+      const operations = JSON.parse(jsonStr) as Array<{
+        action: string;
+        filePath: string;
+        content?: string;
+        findContent?: string;
+        replaceContent?: string;
+      }>;
+
+      // 4. Apply all operations atomically
+      const stepCtx: StepContext = { workspaceRoot };
+      const appliedFiles: string[] = [];
+
+      for (const op of operations) {
+        const buildStep: BuildStep = {
+          id: `multi_${Date.now()}_${appliedFiles.length}`,
+          action: op.action as BuildStep["action"],
+          filePath: op.filePath,
+          content: op.content ?? "",
+          findContent: op.findContent ?? "",
+          replaceContent: op.replaceContent ?? "",
+        };
+        const stepResult = await executeBuildStep(buildStep, stepCtx);
+        if (!stepResult.success) {
+          // 5. Rollback: restore backed-up files
+          for (const f of files) {
+            if (f.content !== "(new file)") {
+              restoreFile(f.step.filePath, workspaceRoot);
+            }
+          }
+          return this.failure(
+            { taskId: `multi_step_group`, targetAgent: this.name, description: "multi-step atomic", input: {}, createdAt: startMs },
+            `Failed at ${op.filePath}: ${stepResult.error}`,
+            Date.now() - startMs
+          );
+        }
+        appliedFiles.push(op.filePath);
+      }
+
+      return this.success(
+        { taskId: `multi_step_group`, targetAgent: this.name, description: "multi-step atomic", input: {}, createdAt: startMs },
+        { applied: appliedFiles, count: appliedFiles.length },
+        { durationMs: Date.now() - startMs, artifacts: appliedFiles.map((f) => ({ type: "file_change", location: f, description: "atomic multi-step" })) }
+      );
+    } catch (err) {
+      // Rollback on any error
+      for (const f of files) {
+        if (f.content !== "(new file)") {
+          restoreFile(f.step.filePath, workspaceRoot);
+        }
+      }
+      return this.failure(
+        { taskId: `multi_step_group`, targetAgent: this.name, description: "multi-step atomic", input: {}, createdAt: startMs },
+        err instanceof Error ? err.message : String(err),
+        Date.now() - startMs
+      );
+    }
   }
 
   /** Delegate to p4_build for the full build phase. */

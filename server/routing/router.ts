@@ -63,7 +63,7 @@ export class AgentRouter {
     const modelProvider = litellmAdapter.providerForModel(defaultModel);
 
     // Check if advanced model is available for high-complexity tasks
-    const advancedModel = "gpt-5";
+    const advancedModel = process.env.MUTLY_ADVANCED_MODEL || "gemini-2.5-pro";
     const hasAdvancedModel = await litellmAdapter.modelAvailable(advancedModel);
 
     let criteriaMatched = "default";

@@ -7,6 +7,7 @@ import {
 } from "../../vibeserve/vibeserveHealth.js";
 import { emitAuditEvent } from "../../audit/auditService.js";
 import { getTraceId } from "../../observability/traceContext.js";
+import { LOG_TYPE, OUTCOME } from "../../lib/constants.js";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_CHARS = 12000;
@@ -37,7 +38,7 @@ export function getMcpConfig(): McpClientConfig {
     apiKey: getEnv("VIBESERVE_API_KEY", ""),
     timeoutMs: parseInt(getEnv("VIBESERVE_TOOL_TIMEOUT_MS", String(DEFAULT_TIMEOUT_MS)), 10),
     maxResponseChars: parseInt(getEnv("VIBESERVE_MAX_RESPONSE_CHARS", String(DEFAULT_MAX_CHARS)), 10),
-    enabled: getEnv("ENABLE_VIBESERVE_MCP", "true") !== "false",
+    enabled: getEnv("ENABLE_VIBESERVE_MCP", "false") !== "false",
     maxRetries: parseInt(getEnv("VIBESERVE_MAX_RETRIES", String(DEFAULT_MAX_RETRIES)), 10),
     backoffBaseMs: parseInt(getEnv("VIBESERVE_BACKOFF_BASE_MS", String(DEFAULT_BACKOFF_BASE_MS)), 10),
     circuitFailureThreshold: parseInt(getEnv("VIBESERVE_CIRCUIT_FAILURE_THRESHOLD", String(DEFAULT_CIRCUIT_FAILURE_THRESHOLD)), 10),
@@ -186,12 +187,17 @@ function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
+// Type for daemon addLog method - matches AgentDaemon.addLog signature
+export type DaemonLogger = {
+  addLog: (type: "success" | "info" | "system" | "error" | "warning", msg: string) => void;
+};
+
 type RetryFn = () => Promise<ToolResult>;
 
 export async function callVibeServeTool(
   toolName: string,
   args: ToolArgs,
-  daemon?: { addLog: (type: string, msg: string) => void }
+  daemon?: DaemonLogger
 ): Promise<ToolResult> {
   const config = getMcpConfig();
   if (!config.enabled) {
@@ -227,7 +233,7 @@ export async function callVibeServeTool(
         recordToolFailure(toolName, duration, `${res.status} ${errText}`);
         setVibeServeReachable(false);
         updateCircuitState(toolName, false, config);
-        daemon?.addLog("error", `MCP_CONNECT_FAILURE: ${res.status} ${errText}`);
+        daemon?.addLog(LOG_TYPE.ERROR, `MCP_CONNECT_FAILURE: ${res.status} ${errText}`);
 
         if (retryIndex < config.maxRetries && isRetryableStatus(res.status)) {
           return scheduleRetry(toolName, args, retryIndex, config, startTime, daemon);
@@ -260,7 +266,7 @@ async function handleSuccess(
   startTime: number,
   config: McpClientConfig,
   wasRetried: boolean,
-  daemon?: { addLog: (type: string, msg: string) => void }
+  daemon?: DaemonLogger
 ): Promise<ToolResult> {
   const raw = await res.json();
   const duration = Date.now() - startTime;
@@ -270,12 +276,12 @@ async function handleSuccess(
   recordToolSuccess(toolName, duration);
   setVibeServeReachable(true);
   updateCircuitState(toolName, true, config);
-  daemon?.addLog("success", `MCP_TOOL_CALL_SUCCESS: ${toolName} (${duration}ms)`);
+  daemon?.addLog(LOG_TYPE.SUCCESS, `MCP_TOOL_CALL_SUCCESS: ${toolName} (${duration}ms)`);
 
   emitAuditEvent({
     route: "vibeserve_mcp",
     tool: toolName,
-    outcome: "success",
+    outcome: OUTCOME.SUCCESS,
     durationMs: duration,
     mcpStatus: "ok",
     details: { retry: wasRetried },
@@ -289,9 +295,9 @@ function finalError(
   msg: string,
   duration: number,
   wasRetried: boolean,
-  daemon?: { addLog: (type: string, msg: string) => void }
+  daemon?: DaemonLogger
 ): ToolResult {
-  daemon?.addLog("error", `MCP_TOOL_CALL_FAILURE: ${toolName} (${duration}ms) - ${msg}`);
+  daemon?.addLog(LOG_TYPE.ERROR, `MCP_TOOL_CALL_FAILURE: ${toolName} (${duration}ms) - ${msg}`);
   emitAuditEvent({
     route: "vibeserve_mcp",
     tool: toolName,
@@ -309,7 +315,7 @@ async function scheduleRetry(
   retryIndex: number,
   config: McpClientConfig,
   startTime: number,
-  daemon?: { addLog: (type: string, msg: string) => void }
+  daemon?: DaemonLogger
 ): Promise<ToolResult> {
   const backoff = computeBackoffMs(retryIndex, config.backoffBaseMs);
   daemon?.addLog("warning", `MCP_RETRY: ${toolName} attempt ${retryIndex + 1}/${config.maxRetries} in ${Math.round(backoff)}ms`);
@@ -325,7 +331,7 @@ async function doRetryFetch(
   retryIndex: number,
   config: McpClientConfig,
   startTime: number,
-  daemon?: { addLog: (type: string, msg: string) => void }
+  daemon?: DaemonLogger
 ): Promise<ToolResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);

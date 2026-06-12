@@ -1,5 +1,6 @@
 import { z } from "zod";
 import "dotenv/config";
+import { logger } from "./lib/logger.js";
 
 /**
  * Centralized configuration schema for Mutly Daemon Agent.
@@ -11,7 +12,7 @@ const envSchema = z.object({
   // --- VibeServe MCP ---
   ENABLE_VIBESERVE_MCP: z
     .string()
-    .default("true")
+    .default("false")
     .transform((v) => v !== "false"),
   VIBESERVE_MCP_URL: z.string().url().default("http://127.0.0.1:8000"),
   VIBESERVE_API_KEY: z.string().optional().default(""),
@@ -140,6 +141,14 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   GEMINI_API_KEY: z.string().optional().default(""),
+
+  // --- Sandbox configuration ---
+  SANDBOX_BASE_IMAGE: z.string().optional().default("alpine@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c"),
+  SANDBOX_MEMORY_LIMIT: z.string().optional().default("512m"),
+  SANDBOX_CPU_LIMIT: z.string().optional().default("0.5"),
+  SANDBOX_PIDS_LIMIT: z.string().optional().default("100").transform((v) => parseInt(v, 10)),
+  SANDBOX_READ_ONLY_ROOTFS: z.string().optional().default("true").transform((v) => v !== "false"),
+  SANDBOX_NETWORK_DISABLED: z.string().optional().default("true").transform((v) => v !== "false"),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -154,7 +163,7 @@ export function validateConfig(env: Record<string, string | undefined> = process
     const issues = result.error.issues.map(
       (i) => `  - ${i.path.join(".")}: ${i.message}`
     );
-    console.warn(`[config] Configuration validation warnings:\n${issues.join("\n")}`);
+    logger.warn({ issues }, `Configuration validation warnings`);
   }
   _config = result.data ?? getFallbackConfig();
   return _config;

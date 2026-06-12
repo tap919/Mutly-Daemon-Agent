@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "score": 0,
+    "totalDurationMs": 4567
+  },
+  "results": [
+    {
+      "instance_id": "mutly__counter-001",
+      "passed": false,
+      "resolved": false,
+      "score": 0,
+      "durationMs": 4567,
+      "steps": 0,
+      "error": "All model providers failed: {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}"
+    }
+  ],
+  "model": "gemini-2.5-flash",
+  "runAt": "2026-06-09T21:00:10.261Z"
+}

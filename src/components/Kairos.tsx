@@ -1,12 +1,13 @@
 import { Terminal, GitCommit, Eye, ShieldAlert, Activity } from "lucide-react";
 import type { FullState } from "../types";
+import LoadingSkeleton from "./LoadingSkeleton";
 
 export default function Kairos({
   agentState,
 }: {
   agentState: FullState | null;
 }) {
-  if (!agentState) return null;
+  if (!agentState) return <LoadingSkeleton variant="card" count={3} />;
   const { logs, microChanges } = agentState;
 
   return (

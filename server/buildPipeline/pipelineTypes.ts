@@ -131,7 +131,7 @@ export interface PipelineState {
 
 export function createPipelineState(workspaceId?: string): PipelineState {
   const now = Date.now();
-  const allPhases: PhaseId[] = ["ingest", "audit", "plan", "build", "verify", "review", "iterate", "ready"];
+  const allPhases: PhaseId[] = ["ingest", "audit", "plan", "build", "verify", "review", "iterate", "ready", "lint_config"];
   const phases = {} as Record<PhaseId, PhaseResult>;
   for (const id of allPhases) {
     phases[id] = { id, status: "pending" };

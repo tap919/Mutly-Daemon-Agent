@@ -16,6 +16,8 @@ export interface FunctionDeclaration {
 
 export interface ToolContext {
   workspaceRoot: string;
+  workspaceId?: string;
+  workflowId?: string;
   daemon: AgentDaemon;
 }
 

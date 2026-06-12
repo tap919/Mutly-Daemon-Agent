@@ -1,7 +1,7 @@
 {
   "features": {
     "main_agent_enabled": true,
-    "adaptive_routing": false,
+    "adaptive_routing": true,
     "autonomous_pipelines": true,
     "human_approvals": true,
     "autonomy_kill_switch": false
@@ -30,6 +30,13 @@
       "endpoint": "",
       "project": ""
     }
+  },
+  "model_router": {
+    "enabled": true,
+    "default_model": "gemini-2.5-flash",
+    "fallback_model": "gemini-2.5-flash",
+    "use_litellm": true,
+    "use_opencode": false
   },
   "pipeline": {
     "drift_threshold": 0.3,

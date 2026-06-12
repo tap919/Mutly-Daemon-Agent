@@ -1,0 +1,3 @@
+{
+  "allowed-endpoints": "github.com:443\napi.github.com:443\nobjects.githubusercontent.com:443\nregistry.npmjs.org:443\npypi.org:443\nfiles.pythonhosted.org:443"
+}

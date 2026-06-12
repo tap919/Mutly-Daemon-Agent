@@ -10,7 +10,7 @@ import { runCli } from "../server/cli/cliEntry.js";
 runCli(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (err) => {
-    console.error("mutly: fatal:", err instanceof Error ? err.message : String(err));
+    process.stderr.write(`mutly: fatal: ${err?.message ?? err}\n`);
     process.exit(2);
   }
 );

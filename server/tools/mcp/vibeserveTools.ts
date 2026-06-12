@@ -4,6 +4,7 @@ import type { AgentTool, ToolArgs, ToolContext } from "../types.js";
 import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
+import { OUTCOME } from "../../lib/constants.js";
 
 export const vsMemoryGetTool: AgentTool = {
   name: "vs_memory_get",
@@ -278,7 +279,7 @@ export const vsOpenCodeExecuteTool: AgentTool = {
       timeout_seconds: args.timeoutSeconds ?? 300,
     }, daemon);
 
-    const success = execResult?.status === "success" || (!execResult?.error && execResult?.exit_code === 0);
+    const success = execResult?.status === OUTCOME.SUCCESS || (!execResult?.error && execResult?.exit_code === 0);
 
     // ── Step 2: Run RepoRank quality gate ───────────────────
     let qualityGate: Record<string, unknown> = {};
@@ -306,12 +307,12 @@ export const vsOpenCodeExecuteTool: AgentTool = {
         context_type: "workflow",
         content: JSON.stringify({
           task: args.task,
-          result: success ? "success" : "error",
+          result: success ? OUTCOME.SUCCESS : OUTCOME.ERROR,
           exitCode: execResult?.exit_code,
           summary,
           reporankScore: qualityGate.reporankScore,
         }),
-        tags: ["opencode", success ? "success" : "failed"],
+        tags: ["opencode", success ? OUTCOME.SUCCESS : "failed"],
       }, daemon);
       if (persistResult && !persistResult.error) {
         hermesPostResult = { hermesPostPersisted: true };

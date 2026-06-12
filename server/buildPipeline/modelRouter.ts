@@ -85,6 +85,10 @@ export function classifyTaskComplexity(task: string): TaskComplexity {
       }
     }
   }
+  // Thresholds calibrated against task complexity heuristics:
+  // score ≤ 0: only trivial keyword matches → use cheap model
+  // score ≤ 2: minor keyword matches → use default model
+  // score > 2: multiple complexity signals → use advanced model
   if (score <= 0) return "trivial";
   if (score <= 2) return "moderate";
   return "hard";

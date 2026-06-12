@@ -112,7 +112,6 @@ export class AgentCoordinator {
             ),
           ]);
           if (result.success) {
-            this.running--;
             // Broadcast the result
             this.bus.broadcast("task_completed", task.targetAgent, { taskId: task.taskId, output: result.output, error: result.error });
             return result;
@@ -131,19 +130,9 @@ export class AgentCoordinator {
         }
       }
 
-      this.running--;
       const errorMsg = lastError instanceof Error ? lastError.message : String(lastError);
       this.bus.broadcast("task_failed", task.targetAgent, { taskId: task.taskId, error: errorMsg });
-      return {
-        taskId: task.taskId,
-        agentName: task.targetAgent,
-        success: false,
-        error: errorMsg,
-        durationMs: Date.now() - startTime,
-        completedAt: Date.now(),
-      };
-
-      return { ...result, durationMs: Date.now() - startTime };
+      throw lastError;
     } catch (err: any) {
       const failedResult: AgentResult = {
         taskId: task.taskId,

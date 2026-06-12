@@ -22,6 +22,15 @@ export function evaluateToolCall(
   extra?: { fileBatchCount?: number; artifactSize?: number }
 ): PolicyDecision {
   const riskLevel: RiskLevel = classifyOperation(action, filePath, opts);
+
+  if (riskLevel === "red") {
+    return {
+      decision: "deny",
+      riskLevel,
+      reason: "Red-risk operation blocked",
+    };
+  }
+
   const approvalDecision: ApprovalDecision = evaluateApprovalPolicy(action, riskLevel, filePath, extra);
   
   if (approvalDecision.requiresApproval) {
@@ -39,8 +48,6 @@ export function evaluateToolCall(
       return { decision: "allow_with_audit", riskLevel };
     case "orange":
       return { decision: "pause_for_approval", riskLevel, reason: "Orange-risk operation" };
-    case "red":
-      return { decision: "deny", riskLevel, reason: "Red-risk operation blocked" };
     default:
       return { decision: "deny", riskLevel, reason: "Unknown risk level" };
   }

@@ -9,10 +9,12 @@ Usage:
   mutly <command> [options]
 
 Commands:
-  build <path>     Run the build pipeline on a local workspace (Sprint A+B)
-  serve [--port=N] Start the Mutly HTTP server (default)
-  doctor           Run environment + dependency health checks
-  help             Show this help
+  build <path>      Run the build pipeline on a local workspace
+  plan "<desc>"     Execute a ReAct planning loop from a description
+  converge <path>   Audit→fix→verify loop until quality threshold met
+  serve [--port=N]  Start the Mutly HTTP server (default)
+  doctor            Run environment + dependency health checks
+  help              Show this help
 
 Global options:
   --json           Emit machine-readable JSON (CI/CD mode)

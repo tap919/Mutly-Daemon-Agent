@@ -37,7 +37,11 @@ const defaultHooks: Required<PipelineHooks> = {
 };
 
 export function buildPipelineDag(opts: BuildPipelineDagOptions): DagNode[] {
-  const h = { ...defaultHooks, ...(opts.hooks ?? {}) };
+  const providedHooks = opts.hooks ?? {};
+  if (!providedHooks || Object.keys(providedHooks).length === 0) {
+    logger.warn("[orchestratorDag] No hooks provided — pipeline will produce no output (no phase implementations)");
+  }
+  const h = { ...defaultHooks, ...providedHooks };
   const pipelineId = opts.pipelineId ?? "pipeline";
 
   return [

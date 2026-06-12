@@ -1,0 +1,27 @@
+name: Socket Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  socket:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: socketio/socket-security-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
