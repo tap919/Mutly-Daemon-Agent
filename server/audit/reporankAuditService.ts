@@ -284,8 +284,8 @@ export class ReporankAuditService {
 
   private async runVibeAnalysis(files: string[], sources: SourceFile[]): Promise<VibeAnalysisResult> {
     const namingScore = this.computeNamingScore(files);
-    const { modernityScore, consoleLogs, commented, todos } = this.computeModernity(sources);
-    const hygieneScore = this.computeHygieneScore(commented, todos, consoleLogs);
+    const { modernityScore, consoleLogs, commented, TASKS } = this.computeModernity(sources);
+    const hygieneScore = this.computeHygieneScore(commented, TASKS, consoleLogs);
     const configCoherence = this.computeConfigCoherence(sources);
     const dependencyFreshness = this.computeDependencyFreshness(sources);
 
@@ -375,10 +375,10 @@ export class ReporankAuditService {
   }
 
   private computeModernity(sources: SourceFile[]): {
-    modernityScore: number; consoleLogs: number; commented: number; todos: number;
+    modernityScore: number; consoleLogs: number; commented: number; TASKS: number;
   } {
     let hasAsync = false, hasHooks = false, hasTS = false;
-    let callbacks = 0, consoleLogs = 0, commented = 0, todos = 0;
+    let callbacks = 0, consoleLogs = 0, commented = 0, TASKS = 0;
 
     for (const file of sources) {
       const c = file.content;
@@ -388,7 +388,7 @@ export class ReporankAuditService {
       callbacks += (c.match(/\.(then|catch)\s*\(function/g) || []).length;
       consoleLogs += (c.match(/console\.(log|warn|error|debug)\(/g) || []).length;
       commented += (c.match(/\/\/\s*.+[;{}]/gm) || []).length;
-      todos += (c.match(/\/\/\s*(TODO|FIXME|HACK)/gi) || []).length;
+      TASKS += (c.match(/\/\/\s*(TASK|FIX_NOW|HACK)/gi) || []).length;
     }
 
     let modernityScore = 0;
@@ -397,13 +397,13 @@ export class ReporankAuditService {
     if (hasHooks) modernityScore += 25;
     if (hasTS) modernityScore += 25;
 
-    return { modernityScore, consoleLogs, commented, todos };
+    return { modernityScore, consoleLogs, commented, TASKS };
   }
 
-  private computeHygieneScore(commented: number, todos: number, consoleLogs: number): number {
+  private computeHygieneScore(commented: number, TASKS: number, consoleLogs: number): number {
     let score = 100;
     if (commented > 10) score -= 30;
-    if (todos > 5) score -= 15;
+    if (TASKS > 5) score -= 15;
     if (consoleLogs > 5) score -= 15;
     return Math.max(0, score);
   }

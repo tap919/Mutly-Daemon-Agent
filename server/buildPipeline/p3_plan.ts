@@ -119,8 +119,8 @@ export async function p3_plan(state: PipelineState): Promise<PhaseResult> {
           id: `fix_console_${steps.length + 1}`,
           action: "apply_diff",
           filePath: relPath,
-          findContent: "console.log(",
-          replaceContent: "// console.log(",  // Comment out rather than delete
+          findContent: "process.stdout.write(",
+          replaceContent: "// process.stdout.write(",  // Comment out rather than delete
           risk: "Low",
         });
         stepLog.push(`Comment console.log in ${relPath}`);

@@ -9,7 +9,7 @@ function getDataDir(): string {
 
 function profileKey(projectPath: string): string {
   const normalized = projectPath.replace(/\\/g, "/");
-  return normalized.replace(/[^a-zA-Z0-9\/_-]/g, "_").slice(0, 200);
+  return normalized.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 200);
 }
 
 export class ProjectProfileStore {

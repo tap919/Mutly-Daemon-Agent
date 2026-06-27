@@ -12,7 +12,7 @@ export const serveCommand: Subcommand = {
 
   async run(args: string[], ctx: CliContext): Promise<number> {
     const portArg = args.find((a) => a.startsWith("--port="));
-    const port = portArg ? parseInt(portArg.split("=")[1], 10) : 3000;
+    const port = portArg ? parseInt(portArg.split("=")[1], 10) : 4000;
 
     ctx.log.info(`Starting Mutly server on port ${port}...`);
 

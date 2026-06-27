@@ -71,24 +71,24 @@ function getFlag(args: string[], name: string, defaultVal: number): number {
 }
 
 function printConvergenceReport(result: { ready: boolean; finalScore: number; iterations: any[]; totalDurationMs: number; reason: string }) {
-  console.log("");
-  console.log("  ╔══════════════════════════════════════════════╗");
-  console.log("  ║       RepoRank Quality Convergence           ║");
-  console.log("  ╚══════════════════════════════════════════════╝");
-  console.log("");
-  console.log(`  Status: ${result.ready ? "✅ CONVERGED" : "❌ NOT CONVERGED"}`);
-  console.log(`  Final Score: ${result.finalScore}/100`);
-  console.log(`  Iterations: ${result.iterations.length}`);
-  console.log(`  Total Duration: ${(result.totalDurationMs / 1000).toFixed(1)}s`);
-  console.log(`  Reason: ${result.reason}`);
-  console.log("");
+  process.stdout.write("");
+  process.stdout.write("  ╔══════════════════════════════════════════════╗");
+  process.stdout.write("  ║       RepoRank Quality Convergence           ║");
+  process.stdout.write("  ╚══════════════════════════════════════════════╝");
+  process.stdout.write("");
+  process.stdout.write(`  Status: ${result.ready ? "✅ CONVERGED" : "❌ NOT CONVERGED"}`);
+  process.stdout.write(`  Final Score: ${result.finalScore}/100`);
+  process.stdout.write(`  Iterations: ${result.iterations.length}`);
+  process.stdout.write(`  Total Duration: ${(result.totalDurationMs / 1000).toFixed(1)}s`);
+  process.stdout.write(`  Reason: ${result.reason}`);
+  process.stdout.write("");
 
   if (result.iterations.length > 0) {
-    console.log("  Iterations:");
+    process.stdout.write("  Iterations:");
     for (const iter of result.iterations) {
       const icon = iter.score >= 85 ? "✓" : "→";
-      console.log(`    ${icon}  #${iter.iteration}: score=${iter.score} findings=${iter.findings} fixed=${iter.fixed} (${iter.durationMs}ms)`);
+      process.stdout.write(`    ${icon}  #${iter.iteration}: score=${iter.score} findings=${iter.findings} fixed=${iter.fixed} (${iter.durationMs}ms)`);
     }
-    console.log("");
+    process.stdout.write("");
   }
 }

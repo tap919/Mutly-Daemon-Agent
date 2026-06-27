@@ -41,10 +41,10 @@ RUN mkdir -p data && chown -R mutly:mutly /app
 
 USER mutly
 
-EXPOSE 3000
+EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:4000/api/health || exit 1
 
 ENV NODE_ENV=production
 

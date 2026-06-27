@@ -73,8 +73,8 @@ describe("BuildPipeline", () => {
 
   it("shows pipeline phases after successful start", async () => {
     mockedMutlyFetch
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ json: () => Promise.resolve({ success: true, pipeline: mockPipeline }) });
+      .mockResolvedValueOnce({} as any)
+      .mockResolvedValueOnce({ json: () => Promise.resolve({ success: true, pipeline: mockPipeline }) } as any);
 
     const { container } = render(<BuildPipeline agentState={sampleAgentState} />);
     selectProject(container);
@@ -97,8 +97,8 @@ describe("BuildPipeline", () => {
     const deferred = new Promise<Response>((resolve) => { deferredResolve = resolve; });
 
     mockedMutlyFetch
-      .mockResolvedValueOnce({})
-      .mockReturnValueOnce(deferred);
+      .mockResolvedValueOnce({} as any)
+      .mockReturnValueOnce(deferred as any);
 
     const { container } = render(<BuildPipeline agentState={sampleAgentState} />);
     selectProject(container);
@@ -106,7 +106,7 @@ describe("BuildPipeline", () => {
     fireEvent.click(screen.getByRole("button", { name: /run pipeline/i }));
     expect(screen.getByText("Starting...")).toBeInTheDocument();
 
-    deferredResolve({ json: () => Promise.resolve({ success: true, pipeline: mockPipeline }) });
+    deferredResolve({ json: () => Promise.resolve({ success: true, pipeline: mockPipeline }) } as any);
     await waitFor(() => {
       expect(screen.getByText("Source Ingestion")).toBeInTheDocument();
     });
@@ -114,7 +114,7 @@ describe("BuildPipeline", () => {
 
   it("shows error display when pipeline fails", async () => {
     mockedMutlyFetch
-      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({} as any)
       .mockRejectedValueOnce(new Error("Network failure"));
 
     const { container } = render(<BuildPipeline agentState={sampleAgentState} />);
@@ -147,8 +147,8 @@ describe("BuildPipeline", () => {
     };
 
     mockedMutlyFetch
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ json: () => Promise.resolve({ success: true, pipeline: completedPipeline }) });
+      .mockResolvedValueOnce({} as any)
+      .mockResolvedValueOnce({ json: () => Promise.resolve({ success: true, pipeline: completedPipeline }) } as any);
 
     const { container } = render(<BuildPipeline agentState={sampleAgentState} />);
     selectProject(container);

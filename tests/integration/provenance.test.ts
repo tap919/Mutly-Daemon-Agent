@@ -3,7 +3,7 @@ import { aiProvenance, humanProvenance, sha256, stamp, workflowHash, formatProve
 
 describe("Provenance — hashing", () => {
   it("sha256 returns a stable prefix", () => {
-    expect(sha256("hello")).toBe("sha256:2cf24dba5fb0a30e");
+    expect(sha256("hello")).toBe("sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
   });
 
   it("different inputs hash differently", () => {

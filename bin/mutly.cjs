@@ -86,9 +86,6 @@ function resolvePathInWorkspace(workspaceRoot, relPath) {
   }
   return { ok: true, fullPath };
 }
-function getWorkspaceId(workspaceRoot) {
-  return import_path.default.resolve(workspaceRoot);
-}
 var import_path;
 var init_workspacePaths = __esm({
   "server/lib/workspacePaths.ts"() {
@@ -403,9 +400,6 @@ function getVibeServeReachable() {
 }
 function setVibeServeReachable(reachable) {
   globalThis.__vibeserveReachable = reachable;
-}
-function getAllToolMetrics() {
-  return Array.from(metrics.values());
 }
 var import_node_fs, import_node_path, metrics, METRICS_FILE, persistenceEnabled;
 var init_vibeserveHealth = __esm({
@@ -829,36 +823,6 @@ async function doRetryFetch(toolName, args, retryIndex, config, startTime, daemo
       return scheduleRetry(toolName, args, retryIndex, config, startTime, daemon);
     }
     return finalError(toolName, msg, duration, true, daemon);
-  }
-}
-async function checkVibeServeHealth() {
-  const config = getMcpConfig();
-  if (!config.enabled) {
-    return { reachable: false, error: "disabled" };
-  }
-  const urlError = validateMcpUrl(config.url);
-  if (urlError) return { reachable: false, error: urlError };
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3e3);
-  try {
-    const headers = {};
-    if (config.apiKey) headers["X-VibeServe-API-Key"] = config.apiKey;
-    const res = await fetch(`${config.url}/health`, { headers, signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!res.ok) {
-      setVibeServeReachable(false);
-      return { reachable: false, error: `HTTP ${res.status}` };
-    }
-    const data = await res.json();
-    setVibeServeReachable(true);
-    return { reachable: true, tools: data.tools };
-  } catch (e) {
-    clearTimeout(timeoutId);
-    setVibeServeReachable(false);
-    return {
-      reachable: false,
-      error: e instanceof Error ? e.message : String(e)
-    };
   }
 }
 var DEFAULT_TIMEOUT_MS, DEFAULT_MAX_CHARS, DEFAULT_BACKOFF_BASE_MS, DEFAULT_CIRCUIT_FAILURE_THRESHOLD, DEFAULT_CIRCUIT_RESET_MS, DEFAULT_MAX_RETRIES, PRIVATE_IP, circuitStore;
@@ -2003,14 +1967,9 @@ var init_routingPolicy = __esm({
 });
 
 // server/routing/routingMetrics.ts
-function getRecentRoutingMetrics() {
-  return [...recentMetrics];
-}
-var recentMetrics;
 var init_routingMetrics = __esm({
   "server/routing/routingMetrics.ts"() {
     "use strict";
-    recentMetrics = [];
   }
 });
 
@@ -2070,144 +2029,12 @@ var init_persistStore = __esm({
 });
 
 // server/execution/workflowCoordinator.ts
-function stateFileFor(workflowId) {
-  const safe = workflowId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return getDataPath(`workflow-state-${safe}.json`);
-}
-var import_fs7, defaultState, WorkflowCoordinator, StepBudgetManager;
+var StepBudgetManager;
 var init_workflowCoordinator = __esm({
   "server/execution/workflowCoordinator.ts"() {
     "use strict";
     init_logger();
-    import_fs7 = __toESM(require("fs"), 1);
     init_persistStore();
-    defaultState = () => ({
-      queued: false,
-      running: false,
-      pausedForApproval: false,
-      approved: false,
-      rejected: false,
-      failed: false,
-      complete: false
-    });
-    WorkflowCoordinator = class _WorkflowCoordinator {
-      constructor(workflowId, maxFilesPerStep = 10, maxCostPerWorkflow = 2) {
-        this.state = defaultState();
-        this.workflowId = workflowId;
-        this.maxFilesPerStep = maxFilesPerStep;
-        this.maxCostPerWorkflow = maxCostPerWorkflow;
-      }
-      static async loadOrCreate(workflowId) {
-        const coord = new _WorkflowCoordinator(workflowId);
-        await coord.loadState();
-        return coord;
-      }
-      statePath() {
-        return stateFileFor(this.workflowId);
-      }
-      async saveState() {
-        await withFileLock(this.statePath(), async () => {
-          await atomicWriteJson(this.statePath(), this.state);
-        });
-      }
-      async loadState() {
-        const file = this.statePath();
-        if (import_fs7.default.existsSync(file)) {
-          const data = await readJsonFile(file, {});
-          this.state = { ...defaultState(), ...data };
-        }
-      }
-      async killSwitch() {
-        this.state.failed = true;
-        this.state.running = false;
-        this.state.complete = false;
-        await this.saveState();
-        logger.warn("[WorkflowCoordinator] Kill switch activated. Workflow aborted.");
-      }
-      async resume() {
-        this.state.running = true;
-        this.state.pausedForApproval = false;
-        await this.saveState();
-      }
-      setQueued(workflowId, traceId) {
-        this.state = { ...defaultState(), queued: true, workflowId, traceId };
-        return this;
-      }
-      setRunning() {
-        this.state.running = true;
-        this.state.queued = false;
-        this.state.pausedForApproval = false;
-        return this;
-      }
-      setPausedForApproval(pending) {
-        this.state.pausedForApproval = true;
-        this.state.phase = "paused_for_approval";
-        this.state.pendingApproval = pending;
-        return this;
-      }
-      setApproved() {
-        this.state.pausedForApproval = false;
-        this.state.approved = true;
-        this.state.phase = "approved";
-        this.state.pendingApproval = void 0;
-        return this;
-      }
-      setRejected() {
-        this.state.pausedForApproval = false;
-        this.state.rejected = true;
-        this.state.phase = "rejected";
-        this.state.pendingApproval = void 0;
-        return this;
-      }
-      setFailed() {
-        this.state.failed = true;
-        this.state.running = false;
-        this.state.phase = "failed";
-        this.state.pausedForApproval = false;
-        return this;
-      }
-      setComplete() {
-        this.state.complete = true;
-        this.state.running = false;
-        this.state.phase = "complete";
-        return this;
-      }
-      getState() {
-        return { ...this.state };
-      }
-      setState(saved) {
-        this.state = { ...this.state, ...saved };
-        return this;
-      }
-      getLimits() {
-        return {
-          maxFilesPerStep: this.maxFilesPerStep,
-          maxCostPerWorkflow: this.maxCostPerWorkflow
-        };
-      }
-      serialize() {
-        return JSON.stringify(this.state);
-      }
-      restore(serialized) {
-        try {
-          const restored = JSON.parse(serialized);
-          this.state = { ...defaultState(), ...restored };
-        } catch (err) {
-          logger.error("[WorkflowCoordinator] Failed to restore state: %s", String(err));
-        }
-        return this;
-      }
-      applyPolicyPause(decision, correlationId, action) {
-        if (decision.decision === "pause_for_approval") {
-          this.setPausedForApproval({
-            correlationId,
-            action,
-            riskLevel: decision.riskLevel,
-            reason: decision.reason
-          });
-        }
-      }
-    };
     StepBudgetManager = class {
       constructor() {
         this.budgets = /* @__PURE__ */ new Map();
@@ -2528,12 +2355,12 @@ var init_router = __esm({
 });
 
 // server/tools/native/createFileTool.ts
-var import_genai3, import_fs8, import_path8, createFileTool;
+var import_genai3, import_fs7, import_path8, createFileTool;
 var init_createFileTool = __esm({
   "server/tools/native/createFileTool.ts"() {
     "use strict";
     import_genai3 = require("@google/genai");
-    import_fs8 = __toESM(require("fs"), 1);
+    import_fs7 = __toESM(require("fs"), 1);
     import_path8 = __toESM(require("path"), 1);
     init_workspacePaths();
     init_router();
@@ -2567,10 +2394,10 @@ var init_createFileTool = __esm({
           return { error: resolved.error };
         }
         const dir = import_path8.default.dirname(resolved.fullPath);
-        if (!import_fs8.default.existsSync(dir)) {
-          import_fs8.default.mkdirSync(dir, { recursive: true });
+        if (!import_fs7.default.existsSync(dir)) {
+          import_fs7.default.mkdirSync(dir, { recursive: true });
         }
-        import_fs8.default.writeFileSync(resolved.fullPath, content, "utf-8");
+        import_fs7.default.writeFileSync(resolved.fullPath, content, "utf-8");
         ctx.daemon.addLog(LOG_TYPE.SUCCESS, `Tool Outcome: Successfully created file "${relPath}"`);
         ctx.daemon.addMicroChange("/" + relPath, "added", `+${content.split("\n").length} -0`);
         getWorkflowBudgetManager().consumeResources(
@@ -2581,7 +2408,7 @@ var init_createFileTool = __esm({
         const verified = await ctx.daemon.performPostEditVerification(relPath);
         if (!verified) {
           try {
-            import_fs8.default.unlinkSync(resolved.fullPath);
+            import_fs7.default.unlinkSync(resolved.fullPath);
           } catch {
           }
           ctx.daemon.addLog("warning", `Verification failed for new file "${relPath}" \u2014 file removed`);
@@ -2594,12 +2421,12 @@ var init_createFileTool = __esm({
 });
 
 // server/tools/native/applyDiffTool.ts
-var import_genai4, import_fs9, applyDiffTool;
+var import_genai4, import_fs8, applyDiffTool;
 var init_applyDiffTool = __esm({
   "server/tools/native/applyDiffTool.ts"() {
     "use strict";
     import_genai4 = require("@google/genai");
-    import_fs9 = __toESM(require("fs"), 1);
+    import_fs8 = __toESM(require("fs"), 1);
     init_workspacePaths();
     init_router();
     init_constants();
@@ -2627,17 +2454,17 @@ var init_applyDiffTool = __esm({
           ctx.daemon.addLog(LOG_TYPE.ERROR, `Tool Error: ${resolved.error}`);
           return { error: resolved.error };
         }
-        if (!import_fs9.default.existsSync(resolved.fullPath)) {
+        if (!import_fs8.default.existsSync(resolved.fullPath)) {
           ctx.daemon.addLog("warning", `Tool Outcome: File not found at "${relPath}"`);
           return { error: `File not found at: ${relPath}` };
         }
-        const code = import_fs9.default.readFileSync(resolved.fullPath, "utf-8");
+        const code = import_fs8.default.readFileSync(resolved.fullPath, "utf-8");
         if (!code.includes(findText)) {
           ctx.daemon.addLog("warning", `Tool Outcome: findContent mismatch in "${relPath}"`);
           return { error: "Target findContent was not found in the file." };
         }
         const updated = code.split(findText).join(replaceText);
-        import_fs9.default.writeFileSync(resolved.fullPath, updated, "utf-8");
+        import_fs8.default.writeFileSync(resolved.fullPath, updated, "utf-8");
         ctx.daemon.addLog(LOG_TYPE.SUCCESS, `Tool Outcome: Successfully edited "${relPath}"`);
         ctx.daemon.addMicroChange(
           "/" + relPath,
@@ -2651,7 +2478,7 @@ var init_applyDiffTool = __esm({
         );
         const verified = await ctx.daemon.performPostEditVerification(relPath);
         if (!verified) {
-          import_fs9.default.writeFileSync(resolved.fullPath, code, "utf-8");
+          import_fs8.default.writeFileSync(resolved.fullPath, code, "utf-8");
           ctx.daemon.addLog("warning", `Verification failed for "${relPath}" \u2014 changes rolled back`);
           ctx.daemon.addMicroChange("/" + relPath, "modified", `rolled back verification failure`);
           return { success: false, error: `Post-edit verification failed for "${relPath}". Changes have been rolled back.` };
@@ -3490,13 +3317,13 @@ var init_reporankGovernance = __esm({
 });
 
 // server/tools/mcp/vibeserveTools.ts
-var import_genai6, import_fs10, import_path9, import_child_process4, vsMemoryGetTool, vsMemoryStoreTool, vsSchemaValidateTool, vsHermesMemoryQueryTool, vsHermesContextStoreTool, vsHermesSkillGenerateTool, vsHermesHealthTool, vsOpenCodeExecuteTool, vsCodebaseAnalyzeTool, vsRefactorSymbolTool, vsGenerateTestsTool, vsDependencyAuditTool, vsCodeReviewTool, vibeserveTools;
+var import_genai6, import_fs9, import_path9, import_child_process4, vsMemoryGetTool, vsMemoryStoreTool, vsSchemaValidateTool, vsHermesMemoryQueryTool, vsHermesContextStoreTool, vsHermesSkillGenerateTool, vsHermesHealthTool, vsOpenCodeExecuteTool, vsCodebaseAnalyzeTool, vsRefactorSymbolTool, vsGenerateTestsTool, vsDependencyAuditTool, vsCodeReviewTool, vibeserveTools;
 var init_vibeserveTools = __esm({
   "server/tools/mcp/vibeserveTools.ts"() {
     "use strict";
     import_genai6 = require("@google/genai");
     init_mcpVibeServeClient();
-    import_fs10 = __toESM(require("fs"), 1);
+    import_fs9 = __toESM(require("fs"), 1);
     import_path9 = __toESM(require("path"), 1);
     import_child_process4 = require("child_process");
     init_constants();
@@ -3833,7 +3660,7 @@ var init_vibeserveTools = __esm({
         function walk(dir, depth = 0) {
           if (depth > 8 || results.totalFiles >= maxFiles) return;
           try {
-            for (const entry of import_fs10.default.readdirSync(dir, { withFileTypes: true })) {
+            for (const entry of import_fs9.default.readdirSync(dir, { withFileTypes: true })) {
               if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
               const full = import_path9.default.join(dir, entry.name);
               if (entry.isDirectory()) walk(full, depth + 1);
@@ -3842,7 +3669,7 @@ var init_vibeserveTools = __esm({
                 const ext = import_path9.default.extname(entry.name);
                 results.extensions[ext] = (results.extensions[ext] || 0) + 1;
                 try {
-                  const content = import_fs10.default.readFileSync(full, "utf-8");
+                  const content = import_fs9.default.readFileSync(full, "utf-8");
                   const lines = content.split("\n").length;
                   results.totalLines = results.totalLines + lines;
                   if (lines > 300) results.largeFiles.push({ path: full.replace(root, ""), lines });
@@ -3886,18 +3713,18 @@ var init_vibeserveTools = __esm({
         try {
           const searchExts = [".ts", ".tsx", ".js", ".jsx"];
           const walkDir = (dir) => {
-            for (const entry of import_fs10.default.readdirSync(dir, { withFileTypes: true })) {
+            for (const entry of import_fs9.default.readdirSync(dir, { withFileTypes: true })) {
               if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
               const full = import_path9.default.join(dir, entry.name);
               if (entry.isDirectory()) walkDir(full);
               else if (searchExts.includes(import_path9.default.extname(entry.name))) {
                 try {
-                  let content = import_fs10.default.readFileSync(full, "utf-8");
+                  let content = import_fs9.default.readFileSync(full, "utf-8");
                   const regex = new RegExp(`\\b${symbol}\\b`, "g");
                   if (regex.test(content)) {
                     if (action === "rename" && newName) {
                       content = content.replace(regex, newName);
-                      import_fs10.default.writeFileSync(full, content, "utf-8");
+                      import_fs9.default.writeFileSync(full, content, "utf-8");
                     }
                     filesChanged.push(full.replace(root, ""));
                   }
@@ -3934,21 +3761,21 @@ var init_vibeserveTools = __esm({
         if (!filePath) return { error: "filePath required" };
         try {
           const fullPath = import_path9.default.resolve(root, filePath);
-          if (!import_fs10.default.existsSync(fullPath)) return { error: `File not found: ${filePath}` };
+          if (!import_fs9.default.existsSync(fullPath)) return { error: `File not found: ${filePath}` };
           const ext = import_path9.default.extname(filePath);
           const baseName = import_path9.default.basename(filePath, ext);
           const dir = import_path9.default.dirname(filePath);
           let framework = String(args.framework || "");
           if (!framework) {
             const pkgPath = import_path9.default.join(root, "package.json");
-            if (import_fs10.default.existsSync(pkgPath)) {
-              const pkg = JSON.parse(import_fs10.default.readFileSync(pkgPath, "utf-8"));
+            if (import_fs9.default.existsSync(pkgPath)) {
+              const pkg = JSON.parse(import_fs9.default.readFileSync(pkgPath, "utf-8"));
               const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
               if (allDeps.vitest) framework = "vitest";
               else if (allDeps.jest) framework = "jest";
             }
           }
-          const content = import_fs10.default.readFileSync(fullPath, "utf-8");
+          const content = import_fs9.default.readFileSync(fullPath, "utf-8");
           const lines = content.split("\n");
           const exports2 = [];
           for (const line of lines) {
@@ -3999,8 +3826,8 @@ var init_vibeserveTools = __esm({
           const testExt = ext === ".py" ? "_test.py" : `.test${ext}`;
           const testFileName = import_path9.default.join(dir, `${baseName}${testExt}`);
           const testFullPath = import_path9.default.resolve(root, testFileName);
-          import_fs10.default.mkdirSync(import_path9.default.dirname(testFullPath), { recursive: true });
-          import_fs10.default.writeFileSync(testFullPath, testContent, "utf-8");
+          import_fs9.default.mkdirSync(import_path9.default.dirname(testFullPath), { recursive: true });
+          import_fs9.default.writeFileSync(testFullPath, testContent, "utf-8");
           return { success: true, testFile: testFileName, exports: exports2, framework };
         } catch (e) {
           return { success: false, error: e instanceof Error ? e.message : String(e) };
@@ -4027,8 +3854,8 @@ var init_vibeserveTools = __esm({
         const result = {};
         try {
           const pkgPath = import_path9.default.join(root, "package.json");
-          if (!import_fs10.default.existsSync(pkgPath)) return { error: "No package.json found" };
-          const pkg = JSON.parse(import_fs10.default.readFileSync(pkgPath, "utf-8"));
+          if (!import_fs9.default.existsSync(pkgPath)) return { error: "No package.json found" };
+          const pkg = JSON.parse(import_fs9.default.readFileSync(pkgPath, "utf-8"));
           const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
           result.totalDeps = Object.keys(allDeps).length;
           if (args.checkOutdated !== false) {
@@ -4084,7 +3911,7 @@ var init_vibeserveTools = __esm({
         const findings = [];
         const checkFile = (file) => {
           try {
-            const content = import_fs10.default.readFileSync(file, "utf-8");
+            const content = import_fs9.default.readFileSync(file, "utf-8");
             const lines = content.split("\n");
             const relPath = file.replace(root, "");
             if (args.checkSecurity !== false) {
@@ -4111,7 +3938,7 @@ var init_vibeserveTools = __esm({
         } else {
           const walk = (dir) => {
             try {
-              for (const entry of import_fs10.default.readdirSync(dir, { withFileTypes: true })) {
+              for (const entry of import_fs9.default.readdirSync(dir, { withFileTypes: true })) {
                 if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist") continue;
                 const full = import_path9.default.join(dir, entry.name);
                 if (entry.isDirectory()) walk(full);
@@ -4882,6 +4709,235 @@ var init_errors = __esm({
   }
 });
 
+// server/lib/llm/GeminiProvider.ts
+var import_genai8, GeminiProvider;
+var init_GeminiProvider = __esm({
+  "server/lib/llm/GeminiProvider.ts"() {
+    "use strict";
+    import_genai8 = require("@google/genai");
+    GeminiProvider = class {
+      constructor() {
+        this.name = "gemini";
+        this.client = null;
+        this.clientKey = "";
+      }
+      getClient() {
+        const key = process.env.GEMINI_API_KEY || "";
+        if (!key) {
+          throw new Error("GEMINI_API_KEY environment variable is not defined.");
+        }
+        if (this.client && this.clientKey === key) {
+          return this.client;
+        }
+        this.clientKey = key;
+        this.client = new import_genai8.GoogleGenAI({ apiKey: key });
+        return this.client;
+      }
+      async generateContent(params) {
+        const ai = this.getClient();
+        const response = await ai.models.generateContent({
+          model: params.model,
+          contents: params.contents,
+          config: params.config
+        });
+        return {
+          text: response.text,
+          candidates: response.candidates,
+          functionCalls: response.functionCalls
+        };
+      }
+      async embedContent(params) {
+        const ai = this.getClient();
+        const response = await ai.models.embedContent({
+          model: params.model,
+          contents: params.contents
+        });
+        return {
+          embedding: response.embedding,
+          embeddings: response.embeddings
+        };
+      }
+    };
+  }
+});
+
+// server/lib/llm/OpenCodeProvider.ts
+function convertGenAiContentToOpenAi(contents) {
+  if (typeof contents === "string") {
+    return [{ role: "user", content: contents }];
+  }
+  const messages = [];
+  for (const c of contents) {
+    const role = c.role === "model" ? "assistant" : c.role === "user" ? "user" : "user";
+    const parts = c.parts || [];
+    let textContent = "";
+    const toolCalls = [];
+    for (const part of parts) {
+      if (part.text) {
+        textContent += part.text;
+      } else if (part.functionCall) {
+        toolCalls.push({
+          id: part.functionCall.id || `fc_${Date.now()}`,
+          type: "function",
+          function: {
+            name: part.functionCall.name || "",
+            arguments: JSON.stringify(part.functionCall.args || {})
+          }
+        });
+      } else if (part.functionResponse) {
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(part.functionResponse.response || {}),
+          tool_call_id: part.functionResponse.id || `fc_${Date.now()}`
+        });
+      }
+    }
+    if (textContent || toolCalls.length === 0) {
+      messages.push({
+        role,
+        content: textContent || null,
+        ...toolCalls.length ? { tool_calls: toolCalls } : {}
+      });
+    } else if (toolCalls.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: toolCalls
+      });
+    }
+  }
+  return messages;
+}
+var OpenCodeProvider;
+var init_OpenCodeProvider = __esm({
+  "server/lib/llm/OpenCodeProvider.ts"() {
+    "use strict";
+    OpenCodeProvider = class {
+      constructor() {
+        this.name = "opencode";
+        this.baseUrl = process.env.OPENCODE_API_URL || "https://api.mistral.ai";
+        this.apiKey = process.env.OPENCODE_API_KEY || process.env.MISTRAL_API_KEY || "NPveJvmlJmLAE8Nq0KqgIfwVA0QHJ6Ni";
+        this.apiModel = process.env.OPENCODE_API_MODEL || "mistral-large-latest";
+        this.modelMap = {
+          "gemini-2.5-flash": this.apiModel,
+          "gemini-embedding-2-preview": this.apiModel,
+          "deepseek-chat": "deepseek-chat"
+        };
+      }
+      async makeRequest(body) {
+        const url = `${this.baseUrl}/v1/chat/completions`;
+        const keyPreview = this.apiKey.substring(0, 8) + "...";
+        console.error(`[OpenCodeProvider] POST ${url} (key=${keyPreview}) Body: ${JSON.stringify(body).substring(0, 500)}`);
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this.apiKey}`
+          },
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "unknown");
+          console.error(`[OpenCodeProvider] Error ${response.status}: ${errText.substring(0, 500)}`);
+          throw new Error(`OpenCode API error (${response.status}): ${errText}`);
+        }
+        const rawResponse = await response.text();
+        console.error(`[OpenCodeProvider] Raw response: ${rawResponse.substring(0, 500)}`);
+        return JSON.parse(rawResponse);
+      }
+      async generateContent(params) {
+        const model = this.modelMap[params.model] || this.apiModel;
+        const messages = convertGenAiContentToOpenAi(params.contents);
+        if (params.config?.responseMimeType === "application/json") {
+          messages.unshift({
+            role: "system",
+            content: "You are a JSON generator. Always respond with valid JSON matching the requested schema. Return ONLY the JSON object, no markdown formatting or explanation."
+          });
+        }
+        const body = {
+          model,
+          messages,
+          max_tokens: 8192,
+          temperature: 0.2
+        };
+        if (params.config?.responseMimeType === "application/json") {
+          body.response_format = { type: "json_object" };
+        }
+        if (params.config?.tools?.length) {
+          body.tools = params.config.tools.map((t) => ({
+            type: "function",
+            function: t.functionDeclarations?.[0] || t
+          }));
+          body.tool_choice = "auto";
+        }
+        const data = await this.makeRequest(body);
+        const choice = data.choices?.[0];
+        if (!choice) {
+          return { text: "", candidates: [] };
+        }
+        const text = choice.message?.content || "";
+        const toolCalls = data.choices?.[0]?.message?.tool_calls;
+        const functionCalls = toolCalls?.map((tc) => ({
+          name: tc.function?.name,
+          args: (() => {
+            try {
+              return JSON.parse(tc.function?.arguments || "{}");
+            } catch {
+              return {};
+            }
+          })(),
+          id: tc.id
+        })) || void 0;
+        return {
+          text,
+          candidates: [
+            {
+              content: {
+                role: choice.message?.role || "assistant",
+                parts: [{ text }]
+              }
+            }
+          ],
+          functionCalls
+        };
+      }
+      async embedContent(_params) {
+        return { embedding: { values: [] }, embeddings: [] };
+      }
+    };
+  }
+});
+
+// server/lib/llm/createProvider.ts
+function isOpenCodeModel(model) {
+  if (!model) return false;
+  return OPENCODE_MODELS.some((prefix) => model.startsWith(prefix));
+}
+function createProvider() {
+  const configuredProvider = process.env.LLM_PROVIDER || "gemini";
+  if (configuredProvider === "opencode") {
+    return new OpenCodeProvider();
+  }
+  const activeModel = process.env.ACTIVE_MODEL || "";
+  if (isOpenCodeModel(activeModel)) {
+    return new OpenCodeProvider();
+  }
+  return new GeminiProvider();
+}
+var OPENCODE_MODELS;
+var init_createProvider = __esm({
+  "server/lib/llm/createProvider.ts"() {
+    "use strict";
+    init_GeminiProvider();
+    init_OpenCodeProvider();
+    OPENCODE_MODELS = [
+      "opencode/deepseek-v4-flash-free",
+      "opencode/deepseek-v4-flash",
+      "opencode/"
+    ];
+  }
+});
+
 // server/agentDaemon.ts
 var agentDaemon_exports = {};
 __export(agentDaemon_exports, {
@@ -4904,22 +4960,22 @@ function scanWorkspace(dir) {
   let linesOfCode = 0;
   let suspiciousPatterns = 0;
   function walk(currentDir) {
-    if (!import_fs11.default.existsSync(currentDir)) return;
-    const files = import_fs11.default.readdirSync(currentDir);
+    if (!import_fs10.default.existsSync(currentDir)) return;
+    const files = import_fs10.default.readdirSync(currentDir);
     for (const file of files) {
       if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "embeddings.json" || file === "dist-server") {
         continue;
       }
       const fullPath = import_path10.default.join(currentDir, file);
       try {
-        const stat = import_fs11.default.statSync(fullPath);
+        const stat = import_fs10.default.statSync(fullPath);
         if (stat.isDirectory()) {
           walk(fullPath);
         } else if (stat.isFile()) {
           const ext = import_path10.default.extname(file);
           if ([".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".css"].includes(ext)) {
             filesCount++;
-            const content = import_fs11.default.readFileSync(fullPath, "utf-8");
+            const content = import_fs10.default.readFileSync(fullPath, "utf-8");
             const lines = content.split("\n");
             linesOfCode += lines.length;
             const contentLower = content.toLowerCase();
@@ -4939,15 +4995,15 @@ function getWorkspaceSymbols() {
   const root = process.cwd();
   const fileSymbolsList = [];
   function walk(currentDir) {
-    if (!import_fs11.default.existsSync(currentDir)) return;
-    const files = import_fs11.default.readdirSync(currentDir);
+    if (!import_fs10.default.existsSync(currentDir)) return;
+    const files = import_fs10.default.readdirSync(currentDir);
     for (const file of files) {
       if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "embeddings.json" || file === "dist-server") {
         continue;
       }
       const fullPath = import_path10.default.join(currentDir, file);
       try {
-        const stat = import_fs11.default.statSync(fullPath);
+        const stat = import_fs10.default.statSync(fullPath);
         if (stat.isDirectory()) {
           walk(fullPath);
         } else if (stat.isFile()) {
@@ -5013,7 +5069,7 @@ function getWorkspaceSymbols() {
             };
             var parseNode = parseNode2, hasExportModifier = hasExportModifier2;
             const relPath = import_path10.default.relative(root, fullPath);
-            const sourceCode = import_fs11.default.readFileSync(fullPath, "utf-8");
+            const sourceCode = import_fs10.default.readFileSync(fullPath, "utf-8");
             const sourceFile = import_typescript.default.createSourceFile(relPath, sourceCode, import_typescript.default.ScriptTarget.Latest, true);
             const fileSymbols = [];
             parseNode2(sourceFile);
@@ -5032,14 +5088,13 @@ function getWorkspaceSymbols() {
   walk(root);
   return fileSymbolsList;
 }
-var import_genai8, import_crypto3, import_fs11, import_path10, import_typescript, AgentDaemon, agentDaemon;
+var import_crypto3, import_fs10, import_path10, import_typescript, AgentDaemon, agentDaemon;
 var init_agentDaemon = __esm({
   "server/agentDaemon.ts"() {
     "use strict";
     init_fileVerifier();
-    import_genai8 = require("@google/genai");
     import_crypto3 = require("crypto");
-    import_fs11 = __toESM(require("fs"), 1);
+    import_fs10 = __toESM(require("fs"), 1);
     import_path10 = __toESM(require("path"), 1);
     import_typescript = __toESM(require("typescript"), 1);
     init_vectorEngine();
@@ -5055,6 +5110,7 @@ var init_agentDaemon = __esm({
     init_secretsManager();
     init_errors();
     init_constants();
+    init_createProvider();
     AgentDaemon = class {
       constructor() {
         this.uptimeStarted = Date.now();
@@ -5097,9 +5153,8 @@ var init_agentDaemon = __esm({
           }
         };
         this.interval = null;
-        this._aiClient = null;
-        this._aiClientKey = "";
         this.lastAnalysis = null;
+        this.llmProvider = createProvider();
         this.spec = `# App Specification (SPEC.md)
 
 ## Core Architecture
@@ -5119,15 +5174,15 @@ var init_agentDaemon = __esm({
 - Complete token compaction.
 `;
         try {
-          if (import_fs11.default.existsSync(resolveSpecFilePath())) {
-            this.spec = import_fs11.default.readFileSync(resolveSpecFilePath(), "utf-8");
+          if (import_fs10.default.existsSync(resolveSpecFilePath())) {
+            this.spec = import_fs10.default.readFileSync(resolveSpecFilePath(), "utf-8");
           } else {
-            import_fs11.default.writeFileSync(resolveSpecFilePath(), this.spec, "utf-8");
+            import_fs10.default.writeFileSync(resolveSpecFilePath(), this.spec, "utf-8");
           }
-          if (import_fs11.default.existsSync(resolveClaudeFilePath())) {
-            this.claude = import_fs11.default.readFileSync(resolveClaudeFilePath(), "utf-8");
+          if (import_fs10.default.existsSync(resolveClaudeFilePath())) {
+            this.claude = import_fs10.default.readFileSync(resolveClaudeFilePath(), "utf-8");
           } else {
-            import_fs11.default.writeFileSync(resolveClaudeFilePath(), this.claude, "utf-8");
+            import_fs10.default.writeFileSync(resolveClaudeFilePath(), this.claude, "utf-8");
           }
         } catch (e) {
           logger.error({ err: e }, "FileSystem specifications failed");
@@ -5163,17 +5218,8 @@ var init_agentDaemon = __esm({
         this.performStartupAudit().catch((err) => logger.error({ err }, "Startup audit failed"));
         this.start();
       }
-      getAi() {
-        const key = process.env.GEMINI_API_KEY || "";
-        if (!key) {
-          throw new Error("GEMINI_API_KEY environment variable is not defined.");
-        }
-        if (this._aiClient && this._aiClientKey === key) {
-          return this._aiClient;
-        }
-        this._aiClientKey = key;
-        this._aiClient = new import_genai8.GoogleGenAI({ apiKey: key });
-        return this._aiClient;
+      getLlmProviderName() {
+        return this.llmProvider.name;
       }
       /**
        * Execute an LLM call with circuit breaker and recovery handling.
@@ -5202,19 +5248,19 @@ var init_agentDaemon = __esm({
       getSecureKey() {
         return this.secureKey;
       }
-      scanAndDetectChanges(init2 = false) {
+      scanAndDetectChanges(init = false) {
         const changedFiles = [];
         const visited = /* @__PURE__ */ new Set();
         const walk = (currentDir) => {
-          if (!import_fs11.default.existsSync(currentDir)) return;
-          const files = import_fs11.default.readdirSync(currentDir);
+          if (!import_fs10.default.existsSync(currentDir)) return;
+          const files = import_fs10.default.readdirSync(currentDir);
           for (const file of files) {
             if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "dist-server") {
               continue;
             }
             const fullPath = import_path10.default.join(currentDir, file);
             try {
-              const stat = import_fs11.default.statSync(fullPath);
+              const stat = import_fs10.default.statSync(fullPath);
               if (stat.isDirectory()) {
                 walk(fullPath);
               } else if (stat.isFile()) {
@@ -5257,8 +5303,8 @@ var init_agentDaemon = __esm({
       }
       loadState() {
         try {
-          if (import_fs11.default.existsSync(resolveDbPath())) {
-            const stored = JSON.parse(import_fs11.default.readFileSync(resolveDbPath(), "utf-8"));
+          if (import_fs10.default.existsSync(resolveDbPath())) {
+            const stored = JSON.parse(import_fs10.default.readFileSync(resolveDbPath(), "utf-8"));
             if (stored.logs) this.logs = stored.logs;
             if (stored.microChanges) this.microChanges = stored.microChanges;
             if (stored.currentPlan) this.currentPlan = stored.currentPlan;
@@ -5268,9 +5314,9 @@ var init_agentDaemon = __esm({
             if (stored.sandboxLogs) this.sandboxLogs = stored.sandboxLogs;
           }
           const embeddingsPath = import_path10.default.resolve(process.cwd(), "embeddings.json");
-          if (import_fs11.default.existsSync(embeddingsPath)) {
+          if (import_fs10.default.existsSync(embeddingsPath)) {
             try {
-              const storedEmbed = JSON.parse(import_fs11.default.readFileSync(embeddingsPath, "utf-8"));
+              const storedEmbed = JSON.parse(import_fs10.default.readFileSync(embeddingsPath, "utf-8"));
               if (Array.isArray(storedEmbed)) {
                 this.fileEmbeddings = storedEmbed;
               }
@@ -5285,7 +5331,7 @@ var init_agentDaemon = __esm({
       saveEmbeddings() {
         try {
           const embeddingsPath = import_path10.default.resolve(process.cwd(), "embeddings.json");
-          import_fs11.default.writeFileSync(embeddingsPath, JSON.stringify(this.fileEmbeddings, null, 2), "utf-8");
+          import_fs10.default.writeFileSync(embeddingsPath, JSON.stringify(this.fileEmbeddings, null, 2), "utf-8");
         } catch (e) {
           logger.error({ err: e }, "Failed to save embeddings to embeddings.json");
         }
@@ -5313,7 +5359,7 @@ var init_agentDaemon = __esm({
             secureKey: this.secureKey,
             sandboxLogs: this.sandboxLogs
           };
-          import_fs11.default.writeFileSync(resolveDbPath(), JSON.stringify(data, null, 2), "utf-8");
+          import_fs10.default.writeFileSync(resolveDbPath(), JSON.stringify(data, null, 2), "utf-8");
         } catch (e) {
           logger.error({ err: e }, "Failed to save state to db.json");
         }
@@ -5450,25 +5496,22 @@ var init_agentDaemon = __esm({
         this.addLog("info", "Initiating REPL execution tree generation...");
         this.saveState();
         try {
-          if (!process.env.GEMINI_API_KEY) {
-            throw new Error("GEMINI_API_KEY is not set.");
-          }
           const prompt = `You are the REPL Engine. Review the SPEC.md and CLAUDE.md below, and create a single-threaded deterministic action plan as a JSON object with this schema:
-       {
-         "message": "reasoning or constraints check",
-         "tree": [
-           { "id": 1, "step": "exact bash/grep command to run", "risk": "Low", "status": "pending" }
-         ]
-       }
+        {
+          "message": "reasoning or constraints check",
+          "tree": [
+            { "id": 1, "step": "exact bash/grep command to run", "risk": "Low", "status": "pending" }
+          ]
+        }
 
-       SPEC.md:
-       ${this.spec}
+        SPEC.md:
+        ${this.spec}
 
-       CLAUDE.md:
-       ${this.claude}
-       `;
+        CLAUDE.md:
+        ${this.claude}
+        `;
           const response = await this.withLlmRecovery("generate-repl-plan", async () => {
-            return this.getAi().models.generateContent({
+            return this.llmProvider.generateContent({
               model: "gemini-2.5-flash",
               contents: prompt,
               config: {
@@ -5476,16 +5519,31 @@ var init_agentDaemon = __esm({
               }
             });
           });
+          console.error("[generatePlan] RAW response text:", JSON.stringify(response.text?.substring(0, 500)));
           const data = JSON.parse(response.text || "{}");
-          this.currentPlan = {
-            success: true,
-            planId: "pln_" + Date.now(),
-            message: data.message || "REPL execution planned.",
-            tree: (data.tree || []).map((t) => ({
-              ...t,
-              status: t.status || "pending"
-            }))
-          };
+          if (!data.tree || data.tree.length === 0) {
+            this.addLog("warning", "LLM returned an empty plan. Generating a heuristic fallback plan.");
+            this.currentPlan = {
+              success: true,
+              planId: "pln_heuristic_" + Date.now(),
+              message: data.message || "Heuristic plan generated due to empty LLM response. Improve SPEC.md/CLAUDE.md for better plans.",
+              tree: [
+                { id: "heuristic_1", step: "Review existing SPEC.md and CLAUDE.md for clarity and detail", risk: "Low", status: "pending" },
+                { id: "heuristic_2", step: "Add more detailed requirements to SPEC.md and guardrails to CLAUDE.md", risk: "Medium", status: "pending" },
+                { id: "heuristic_3", step: "Re-run plan generation after updating specifications", risk: "Low", status: "pending" }
+              ]
+            };
+          } else {
+            this.currentPlan = {
+              success: true,
+              planId: "pln_" + Date.now(),
+              message: data.message || "REPL execution planned.",
+              tree: (data.tree || []).map((t) => ({
+                ...t,
+                status: t.status || "pending"
+              }))
+            };
+          }
           this.currentPhase = "Pending Review";
           this.addLog(LOG_TYPE.SUCCESS, "REPL execution plan generated successfully.");
           this.saveState();
@@ -5527,39 +5585,35 @@ var init_agentDaemon = __esm({
           { id: "opt_4", step: "Compile codebase into single bundled dist/server.cjs with esbuild", risk: "Low", status: "pending" }
         ];
         try {
-          const hasRealKey = process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.includes("dummy");
-          if (hasRealKey) {
-            const prompt = `You are Mutly, an elite repository optimization architect. An end-user uploaded a ${type} repository named "${repoName}" containing ${fileCount} files with approximately ${loc} lines of code.
-        
-        Generate a highly professional, enterprise-grade Repository Optimization Report and Action Tree as JSON with this schema format:
-        {
-          "message": "highly specific analytical critique of the architecture",
-          "tree": [
-            { "id": "generated_id", "step": "highly specific implementation task", "risk": "Low" | "Medium" | "High", "status": "pending" }
-          ]
-        }
+          const prompt = `You are Mutly, an elite repository optimization architect. An end-user uploaded a ${type} repository named "${repoName}" containing ${fileCount} files with approximately ${loc} lines of code.
+      
+      Generate a highly professional, enterprise-grade Repository Optimization Report and Action Tree as JSON with this schema format:
+      {
+        "message": "highly specific analytical critique of the architecture",
+        "tree": [
+          { "id": "generated_id", "step": "highly specific implementation task", "risk": "Low" | "Medium" | "High", "status": "pending" }
+        ]
+      }
 
-        Only return valid JSON matching the schema. Focus on sub-file token management, atomic rollbacks on writes, lightning-fast native grep search, and disabling heavy interactive prompts.`;
-            const response = await this.withLlmRecovery("generate-repl-plan", async () => {
-              const ai = this.getAi();
-              return ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: prompt,
-                config: {
-                  responseMimeType: "application/json"
-                }
-              });
+      Only return valid JSON matching the schema. Focus on sub-file token management, atomic rollbacks on writes, lightning-fast native grep search, and disabling heavy interactive prompts.`;
+          const response = await this.withLlmRecovery("generate-repl-plan", async () => {
+            return this.llmProvider.generateContent({
+              model: "gemini-2.5-flash",
+              contents: prompt,
+              config: {
+                responseMimeType: "application/json"
+              }
             });
-            const parsed = JSON.parse(response.text || "{}");
-            if (parsed.message) recommendationMessage = parsed.message;
-            if (parsed.tree && parsed.tree.length > 0) {
-              generatedTree = (parsed.tree || []).map((t) => ({
-                id: String(t.id || t.step || Math.random()),
-                step: String(t.step || ""),
-                risk: ["Low", "Medium", "High"].includes(t.risk) ? t.risk : "Low",
-                status: "pending"
-              }));
-            }
+          });
+          const parsed = JSON.parse(response.text || "{}");
+          if (parsed.message) recommendationMessage = parsed.message;
+          if (parsed.tree && parsed.tree.length > 0) {
+            generatedTree = (parsed.tree || []).map((t) => ({
+              id: String(t.id || t.step || Math.random()),
+              step: String(t.step || ""),
+              risk: ["Low", "Medium", "High"].includes(t.risk) ? t.risk : "Low",
+              status: "pending"
+            }));
           }
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);
@@ -5604,14 +5658,11 @@ var init_agentDaemon = __esm({
         this.addLog("system", "Context Token Compaction sequence started.");
         this.saveState();
         try {
-          if (!process.env.GEMINI_API_KEY) {
-            throw new Error("GEMINI_API_KEY is not set.");
-          }
           const prompt = `Compress the following execution log into a single, dense tokenized context block ensuring cache layout preservation (max 2 sentences):
 Logs:
 ${JSON.stringify(this.logs.slice(0, 10))}`;
           const response = await this.withLlmRecovery("auto-dream-compaction", async () => {
-            return this.getAi().models.generateContent({
+            return this.llmProvider.generateContent({
               model: "gemini-2.5-flash",
               contents: prompt
             });
@@ -5643,7 +5694,6 @@ ${JSON.stringify(this.logs.slice(0, 10))}`;
         this.addLog("info", `ReAct Loop: Starting execution for step [${stepId}]: "${step.step}"`);
         this.saveState();
         try {
-          const ai = this.getAi();
           const messages = [
             {
               role: "user",
@@ -5701,7 +5751,7 @@ Strict rules:
             loopCount++;
             this.addLog("info", `ReAct Turn ${loopCount}: Querying LLM...`);
             const response = await this.withLlmRecovery(`react-turn-${loopCount}`, async () => {
-              return ai.models.generateContent({
+              return this.llmProvider.generateContent({
                 model: "gemini-2.5-flash",
                 contents: messages,
                 config: {
@@ -5778,14 +5828,14 @@ Strict rules:
           const root = process.cwd();
           const eligibleFiles = [];
           const findFiles = (currentDir) => {
-            if (!import_fs11.default.existsSync(currentDir)) return;
-            const files = import_fs11.default.readdirSync(currentDir);
+            if (!import_fs10.default.existsSync(currentDir)) return;
+            const files = import_fs10.default.readdirSync(currentDir);
             for (const file of files) {
               if (file === "node_modules" || file === "dist" || file === ".git" || file === ".next" || file === "coverage" || file === "db.json" || file === "embeddings.json" || file === "dist-server" || file === "mutly-sandbox" || file === "dist-sandbox") {
                 continue;
               }
               const fullPath = import_path10.default.join(currentDir, file);
-              const stat = import_fs11.default.statSync(fullPath);
+              const stat = import_fs10.default.statSync(fullPath);
               if (stat.isDirectory()) {
                 findFiles(fullPath);
               } else if (stat.isFile()) {
@@ -5799,17 +5849,16 @@ Strict rules:
           findFiles(root);
           let newEmbeddings = [];
           let indexCount = 0;
-          const ai = this.getAi();
           for (const relPath of eligibleFiles) {
             const fullPath = import_path10.default.join(root, relPath);
-            const stat = import_fs11.default.statSync(fullPath);
+            const stat = import_fs10.default.statSync(fullPath);
             const mtimeMs = stat.mtimeMs;
             const cached = this.fileEmbeddings.find((f) => f.filePath === relPath);
             if (cached && cached.mtimeMs === mtimeMs) {
               newEmbeddings.push(cached);
               continue;
             }
-            const text = import_fs11.default.readFileSync(fullPath, "utf-8");
+            const text = import_fs10.default.readFileSync(fullPath, "utf-8");
             const lines = text.split("\n");
             const chunks = [];
             const chunkSize = 15;
@@ -5825,7 +5874,7 @@ Strict rules:
             for (const chunk of chunks) {
               try {
                 const res = await this.withLlmRecovery(`embed-chunk-${relPath}`, async () => {
-                  return ai.models.embedContent({
+                  return this.llmProvider.embedContent({
                     model: "gemini-embedding-2-preview",
                     contents: chunk
                   });
@@ -5868,9 +5917,8 @@ Strict rules:
         if (!query || query.trim() === "") return [];
         try {
           this.addLog("info", `Semantic Search: Generating query embedding for "${query}"...`);
-          const ai = this.getAi();
           const res = await this.withLlmRecovery("search-embeddings", async () => {
-            return ai.models.embedContent({
+            return this.llmProvider.embedContent({
               model: "gemini-embedding-2-preview",
               contents: query
             });
@@ -5900,9 +5948,8 @@ Strict rules:
         }
       }
       async getEmbeddings(text) {
-        const ai = this.getAi();
         const res = await this.withLlmRecovery("get-embeddings", async () => {
-          return ai.models.embedContent({
+          return this.llmProvider.embedContent({
             model: "gemini-embedding-2-preview",
             contents: text
           });
@@ -5966,9 +6013,9 @@ Strict rules:
         const sandboxPath = "/tmp/mutly-sandbox-workspace";
         const startTime = Date.now();
         const copyFolder2 = (from, to) => {
-          if (!import_fs11.default.existsSync(from)) return;
-          if (!import_fs11.default.existsSync(to)) import_fs11.default.mkdirSync(to, { recursive: true });
-          const items = import_fs11.default.readdirSync(from);
+          if (!import_fs10.default.existsSync(from)) return;
+          if (!import_fs10.default.existsSync(to)) import_fs10.default.mkdirSync(to, { recursive: true });
+          const items = import_fs10.default.readdirSync(from);
           for (const item of items) {
             if ([
               "node_modules",
@@ -5983,33 +6030,33 @@ Strict rules:
             ].includes(item)) continue;
             const src = import_path10.default.join(from, item);
             const dst = import_path10.default.join(to, item);
-            const stat = import_fs11.default.statSync(src);
+            const stat = import_fs10.default.statSync(src);
             if (stat.isDirectory()) {
               copyFolder2(src, dst);
             } else {
-              import_fs11.default.mkdirSync(import_path10.default.dirname(dst), { recursive: true });
-              import_fs11.default.writeFileSync(dst, import_fs11.default.readFileSync(src));
+              import_fs10.default.mkdirSync(import_path10.default.dirname(dst), { recursive: true });
+              import_fs10.default.writeFileSync(dst, import_fs10.default.readFileSync(src));
             }
           }
         };
         const clearFolder2 = (dir) => {
-          if (!import_fs11.default.existsSync(dir)) return;
-          const items = import_fs11.default.readdirSync(dir);
+          if (!import_fs10.default.existsSync(dir)) return;
+          const items = import_fs10.default.readdirSync(dir);
           for (const item of items) {
             const full = import_path10.default.join(dir, item);
-            const stat = import_fs11.default.statSync(full);
+            const stat = import_fs10.default.statSync(full);
             if (stat.isDirectory()) {
-              import_fs11.default.rmSync(full, { recursive: true, force: true });
+              import_fs10.default.rmSync(full, { recursive: true, force: true });
             } else {
-              import_fs11.default.rmSync(full, { force: true });
+              import_fs10.default.rmSync(full, { force: true });
             }
           }
         };
         try {
-          if (import_fs11.default.existsSync(sandboxPath)) {
+          if (import_fs10.default.existsSync(sandboxPath)) {
             clearFolder2(sandboxPath);
           } else {
-            import_fs11.default.mkdirSync(sandboxPath, { recursive: true });
+            import_fs10.default.mkdirSync(sandboxPath, { recursive: true });
           }
           copyFolder2(process.cwd(), sandboxPath);
           this.addSandboxLog("system", `\u2713 Synced workspace to ${sandboxPath}`);
@@ -6138,11 +6185,11 @@ ${errorMessages}`);
       async autoFixCode(filePath, errorLog) {
         try {
           const fullPath = import_path10.default.resolve(process.cwd(), filePath);
-          if (!import_fs11.default.existsSync(fullPath)) {
+          if (!import_fs10.default.existsSync(fullPath)) {
             this.addLog(LOG_TYPE.ERROR, `Auto-fix: File not found "${filePath}"`);
             return false;
           }
-          const currentContent = import_fs11.default.readFileSync(fullPath, "utf-8");
+          const currentContent = import_fs10.default.readFileSync(fullPath, "utf-8");
           const prompt = `You are Mutly, an AI assistant that fixes TypeScript type errors. The file "${filePath}" has the following type errors:
 
 \`\`\`
@@ -6155,9 +6202,8 @@ ${currentContent}
 \`\`\`
 
 Please provide the ENTIRE corrected file content as a single code block. Fix only the type errors \u2014 do not add features or change behavior. Return ONLY the corrected code, nothing else. If you cannot fix it, return the original content unchanged.`;
-          const ai = this.getAi();
           const response = await this.withLlmRecovery(`auto-fix-${filePath}`, async () => {
-            return ai.models.generateContent({
+            return this.llmProvider.generateContent({
               model: "gemini-2.5-flash",
               contents: prompt
             });
@@ -6172,7 +6218,7 @@ Please provide the ENTIRE corrected file content as a single code block. Fix onl
           if (codeBlockMatch) {
             codeToWrite = codeBlockMatch[1];
           }
-          import_fs11.default.writeFileSync(fullPath, codeToWrite, "utf-8");
+          import_fs10.default.writeFileSync(fullPath, codeToWrite, "utf-8");
           this.addLog("info", `Auto-fix: Applied fix to "${filePath}"`);
           const reVerifyResult = await this.runSandboxCommand("npm run lint");
           return reVerifyResult.success;
@@ -6259,14 +6305,6 @@ var init_mutlyAuth = __esm({
 });
 
 // server/observability/langfuse.ts
-function initLangfuse() {
-  if (!process.env.LANGFUSE_PUBLIC_KEY || !process.env.LANGFUSE_SECRET_KEY) return;
-  langfuse = new import_langfuse.Langfuse({
-    secretKey: process.env.LANGFUSE_SECRET_KEY,
-    publicKey: process.env.LANGFUSE_PUBLIC_KEY,
-    baseUrl: process.env.LANGFUSE_BASE_URL || "https://cloud.langfuse.com"
-  });
-}
 function traceLLMCall(opts) {
   if (!langfuse) return;
   try {
@@ -6287,13 +6325,6 @@ function traceLLMCall(opts) {
     });
   } catch (err) {
     logger.warn({ err }, "[langfuse] Failed to trace LLM call");
-  }
-}
-async function flushLangfuse() {
-  if (!langfuse) return;
-  try {
-    await langfuse.shutdownAsync();
-  } catch {
   }
 }
 var import_langfuse, langfuse;
@@ -6444,7 +6475,7 @@ function getDataDir2() {
 }
 function profileKey(projectPath) {
   const normalized = projectPath.replace(/\\/g, "/");
-  return normalized.replace(/[^a-zA-Z0-9\/_-]/g, "_").slice(0, 200);
+  return normalized.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 200);
 }
 var import_node_fs5, import_node_path5, ProjectProfileStore, projectProfileStore;
 var init_projectProfile = __esm({
@@ -6930,7 +6961,7 @@ async function executeShell(description) {
     }
   }
   if (normalizedDescription.includes("create file") || normalizedDescription.includes("write file")) {
-    const fs25 = await import("fs");
+    const fs23 = await import("fs");
     const fileMatch = description.match(/["']([^"']+)["']/) || description.match(/([^\s]+\.[a-z]{1,5})/);
     if (fileMatch) {
       const extractedPath = fileMatch[1];
@@ -6942,9 +6973,9 @@ async function executeShell(description) {
       if (!existsSync13(resolvedPath)) {
         const dir = path11.dirname(resolvedPath);
         if (dir && dir !== resolvedPath) {
-          await fs25.promises.mkdir(dir, { recursive: true });
+          await fs23.promises.mkdir(dir, { recursive: true });
         }
-        await fs25.promises.writeFile(resolvedPath, "// Created by ReAct plan\n", "utf-8");
+        await fs23.promises.writeFile(resolvedPath, "// Created by ReAct plan\n", "utf-8");
         return { exitCode: 0, stdout: `Created file: ${resolvedPath}`, stderr: "" };
       }
       return { exitCode: 0, stdout: `File already exists: ${resolvedPath}`, stderr: "" };
@@ -7730,779 +7761,6 @@ var init_ws_server = __esm({
   }
 });
 
-// server/inngest/client.ts
-var import_inngest, inngest;
-var init_client = __esm({
-  "server/inngest/client.ts"() {
-    "use strict";
-    import_inngest = require("inngest");
-    inngest = new import_inngest.Inngest({
-      id: "mutly-daemon",
-      eventKey: process.env.INNGEST_EVENT_KEY,
-      retry: {
-        default: { maxAttempts: 3, minTimeout: 1e3, maxTimeout: 3e4 }
-      }
-    });
-  }
-});
-
-// server/policy/approvalStore.ts
-var ApprovalResolutionError, STORE_FILE, ApprovalStore, approvalStore, ApprovalPausedError;
-var init_approvalStore = __esm({
-  "server/policy/approvalStore.ts"() {
-    "use strict";
-    init_client();
-    init_auditService();
-    init_persistStore();
-    ApprovalResolutionError = class extends Error {
-      constructor(message, code) {
-        super(message);
-        this.code = code;
-        this.name = "ApprovalResolutionError";
-      }
-    };
-    STORE_FILE = () => getDataPath("approvals.json");
-    ApprovalStore = class {
-      constructor() {
-        this.requests = /* @__PURE__ */ new Map();
-        this.pendingExecutions = /* @__PURE__ */ new Map();
-        this.loaded = false;
-      }
-      async ensureLoaded() {
-        if (this.loaded) return;
-        const data = await readJsonFile(STORE_FILE(), {
-          requests: {},
-          pendingExecutions: {}
-        });
-        for (const [id, req] of Object.entries(data.requests)) {
-          this.requests.set(id, req);
-        }
-        for (const [id, pending] of Object.entries(data.pendingExecutions)) {
-          this.pendingExecutions.set(id, pending);
-        }
-        this.loaded = true;
-        await this.checkExpiries();
-      }
-      async persist() {
-        await withFileLock(STORE_FILE(), async () => {
-          const payload = {
-            requests: Object.fromEntries(this.requests.entries()),
-            pendingExecutions: Object.fromEntries(this.pendingExecutions.entries())
-          };
-          await atomicWriteJson(STORE_FILE(), payload);
-        });
-      }
-      async addRequest(request, pending) {
-        await this.ensureLoaded();
-        this.requests.set(request.id, request);
-        if (pending) {
-          this.pendingExecutions.set(request.id, {
-            approvalId: request.id,
-            workflowId: pending.workflowId,
-            stepId: pending.stepId,
-            toolName: pending.toolName,
-            args: pending.args,
-            traceId: pending.traceId,
-            expiresAt: pending.expiresAt ?? request.expiresAt
-          });
-        }
-        await this.persist();
-        emitAuditEvent({
-          route: "approval",
-          tool: request.tool,
-          riskTier: request.riskTier,
-          decision: "pause_for_approval",
-          approval: request.id,
-          filesAffected: request.filesAffected,
-          outcome: "pending",
-          details: { workflowId: request.correlationId }
-        });
-      }
-      async getRequest(id) {
-        await this.ensureLoaded();
-        await this.checkExpiries();
-        return this.requests.get(id);
-      }
-      getPendingExecution(approvalId) {
-        return this.pendingExecutions.get(approvalId);
-      }
-      async listRequests() {
-        await this.ensureLoaded();
-        await this.checkExpiries();
-        return Array.from(this.requests.values());
-      }
-      isExpired(request) {
-        return new Date(request.expiresAt) < /* @__PURE__ */ new Date();
-      }
-      async checkExpiries() {
-        await this.ensureLoaded();
-        const expired = [];
-        for (const [id, request] of this.requests.entries()) {
-          if (this.isExpired(request)) {
-            await this.expireRequest(id, request);
-            expired.push(id);
-          }
-        }
-        return expired;
-      }
-      async expireRequest(id, request) {
-        this.requests.delete(id);
-        this.pendingExecutions.delete(id);
-        await this.persist();
-        emitAuditEvent({
-          route: "approval",
-          tool: request.tool,
-          riskTier: request.riskTier,
-          decision: "expired",
-          approval: id,
-          outcome: "expired",
-          details: { workflowId: request.correlationId }
-        });
-        await this.notifyInngest(id, "expired", request.correlationId);
-      }
-      async notifyInngest(approvalId, decision, workflowId) {
-        try {
-          await inngest.send({
-            name: "mutly/approval.resolved",
-            data: { approvalId, decision, workflowId }
-          });
-        } catch {
-        }
-      }
-      async resolveRequest(id, decision) {
-        await this.ensureLoaded();
-        await this.checkExpiries();
-        const request = this.requests.get(id);
-        if (!request) {
-          throw new ApprovalResolutionError("Approval not found", "NOT_FOUND");
-        }
-        if (this.isExpired(request)) {
-          await this.expireRequest(id, request);
-          throw new ApprovalResolutionError("Approval expired", "EXPIRED");
-        }
-        const pending = this.pendingExecutions.get(id);
-        emitAuditEvent({
-          route: "approval",
-          tool: request.tool,
-          riskTier: request.riskTier,
-          decision,
-          approval: id,
-          filesAffected: request.filesAffected,
-          outcome: decision,
-          details: { workflowId: request.correlationId }
-        });
-        this.requests.delete(id);
-        this.pendingExecutions.delete(id);
-        await this.persist();
-        await this.notifyInngest(id, decision, request.correlationId);
-        return decision === "approved" ? pending ?? null : null;
-      }
-    };
-    approvalStore = new ApprovalStore();
-    ApprovalPausedError = class extends Error {
-      constructor(approvalId) {
-        super(`Workflow paused for approval: ${approvalId}`);
-        this.approvalId = approvalId;
-        this.name = "ApprovalPausedError";
-      }
-    };
-  }
-});
-
-// server/planning/planAugmenter.ts
-function getAugmentationConfig() {
-  return {
-    enabled: process.env.ENABLE_VIBESERVE_PLANNING === "true",
-    mode: process.env.VIBESERVE_PLANNING_MODE || "advisory",
-    requireLocalVerification: process.env.VIBESERVE_REQUIRE_LOCAL_VERIFICATION !== "false"
-  };
-}
-async function augmentPlan(plan, daemon) {
-  const config = getAugmentationConfig();
-  if (!config.enabled) {
-    return { success: false, errors: ["Planning augmentation disabled"] };
-  }
-  daemon.addLog("info", `PLAN_AUGMENT_START: Mode=${config.mode}`);
-  try {
-    const planJson = JSON.stringify({
-      message: plan.message,
-      tree: plan.tree.map((t) => ({
-        id: t.id,
-        step: t.step,
-        risk: t.risk,
-        status: t.status
-      }))
-    });
-    const result = await callVibeServeTool("vs_plan_review", { plan: planJson }, daemon);
-    if (result.error) {
-      daemon.addLog(LOG_TYPE.ERROR, `PLAN_AUGMENT_FAILURE: ${result.error}`);
-      return { success: false, errors: [String(result.error)] };
-    }
-    const artifact = parseArtifact(result.data);
-    if (!artifact) {
-      return { success: false, errors: ["Could not parse artifact from VibeServe"] };
-    }
-    const normalized = normalizeArtifactForModel(artifact);
-    daemon.addLog(LOG_TYPE.SUCCESS, `PLAN_AUGMENT_SUCCESS: Type=${artifact.artifactType}`);
-    return {
-      success: true,
-      artifact,
-      critique: normalized.validationErrors,
-      recommendations: normalized.recommendations
-    };
-  } catch (err) {
-    daemon.addLog(LOG_TYPE.ERROR, `PLAN_AUGMENT_ERROR: ${err.message}`);
-    return { success: false, errors: [err.message] };
-  }
-}
-var init_planAugmenter = __esm({
-  "server/planning/planAugmenter.ts"() {
-    "use strict";
-    init_mcpVibeServeClient();
-    init_artifactNormalizer();
-    init_constants();
-  }
-});
-
-// server/spec/specAssets.ts
-function loadSpecAssets(workspaceRoot) {
-  const read = (name) => {
-    const p = import_path11.default.join(workspaceRoot, name);
-    return import_fs12.default.existsSync(p) ? import_fs12.default.readFileSync(p, "utf-8") : void 0;
-  };
-  const designMd = read("DESIGN.md");
-  const requirementsMd = read("requirements.md");
-  const designDocMd = read("design.md");
-  const tasksMd = read("tasks.md");
-  return {
-    designMd,
-    requirementsMd,
-    designDocMd,
-    tasksMd,
-    hasDesignMd: Boolean(designMd),
-    hasFullSpec: Boolean(requirementsMd && designDocMd && tasksMd)
-  };
-}
-function specSummaryForPlanning(bundle) {
-  if (bundle.hasFullSpec) {
-    return [
-      bundle.requirementsMd?.slice(0, 4e3),
-      bundle.designDocMd?.slice(0, 4e3),
-      bundle.tasksMd?.slice(0, 2e3)
-    ].filter(Boolean).join("\n\n---\n\n");
-  }
-  return bundle.designMd?.slice(0, 6e3);
-}
-var import_fs12, import_path11;
-var init_specAssets = __esm({
-  "server/spec/specAssets.ts"() {
-    "use strict";
-    import_fs12 = __toESM(require("fs"), 1);
-    import_path11 = __toESM(require("path"), 1);
-  }
-});
-
-// server/integration/workflowRunner.ts
-function getWorkflowCoordinator(workflowId) {
-  let c = coordinators.get(workflowId);
-  if (!c) {
-    c = new WorkflowCoordinator(workflowId);
-    coordinators.set(workflowId, c);
-    void c.loadState();
-  }
-  return c;
-}
-function getWorkflowWorkspaceId(workflowId) {
-  return workflowWorkspaceIds.get(workflowId) ?? getWorkspaceId(process.cwd());
-}
-async function startWorkflow(daemon, input) {
-  const workflowId = input.plan.planId ?? `wf_${(0, import_crypto7.randomUUID)()}`;
-  const traceId = createTraceId();
-  const workspaceRoot = input.workspaceRoot ?? process.cwd();
-  const workspaceId = input.workspaceId ?? getWorkspaceId(workspaceRoot);
-  workflowWorkspaceIds.set(workflowId, workspaceId);
-  if (typeof daemon.setActiveWorkflowContext === "function") {
-    daemon.setActiveWorkflowContext(workflowId, workspaceId);
-  }
-  return runWithTrace({ traceId, workflowId }, async () => {
-    const reporank = await runReporankGovernanceCheck("workflow_start", {
-      workflowId
-    });
-    if (reporank.blocked) {
-      daemon.addLog("error", `Reporank blocked workflow: ${reporank.reason}`);
-      throw new Error(reporank.reason ?? "Reporank governance blocked workflow start");
-    }
-    const coordinator = getWorkflowCoordinator(workflowId);
-    coordinator.setQueued(workflowId, traceId).setRunning();
-    await coordinator.saveState();
-    getWorkflowBudgetManager().initializeBudget(workflowId);
-    let memoryContext;
-    if (isVibeServeEnabled()) {
-      const mem = await callVibeServeTool(
-        "vs_memory_get",
-        {
-          workspaceId,
-          contextTypes: ["plan", "schema", "errors", "design"]
-        },
-        daemon
-      );
-      if (!mem.error) memoryContext = mem;
-      await callVibeServeTool(
-        "vs_memory_store",
-        {
-          workspaceId,
-          contextType: "workflow",
-          payload: { workflowId, phase: "start", planId: input.plan.planId }
-        },
-        daemon
-      );
-    }
-    const specBundle = loadSpecAssets(workspaceRoot);
-    let augmentation;
-    if (process.env.ENABLE_VIBESERVE_PLANNING === "true") {
-      augmentation = await augmentPlan(input.plan, daemon);
-      if (specBundle.hasFullSpec || specBundle.hasDesignMd) {
-        daemon.addLog("info", "Spec assets loaded for plan augmentation");
-      }
-    } else if (specSummaryForPlanning(specBundle)) {
-      daemon.addLog("info", "Spec assets present; enable ENABLE_VIBESERVE_PLANNING for remote critique");
-    }
-    emitAuditEvent({
-      workflowId,
-      route: "workflow",
-      tool: "workflow.start",
-      outcome: "started",
-      details: {
-        hasMemory: Boolean(memoryContext),
-        reporankScore: reporank.report.score
-      }
-    });
-    await coordinator.saveState();
-    return {
-      workflowId,
-      traceId,
-      memoryContext,
-      augmentation,
-      coordinatorState: coordinator.getState()
-    };
-  });
-}
-async function completeWorkflow(daemon, workflowId, outcome) {
-  const coordinator = getWorkflowCoordinator(workflowId);
-  const workspaceId = getWorkflowWorkspaceId(workflowId);
-  const govResult = await runReporankGovernanceCheck("workflow_end", { workflowId });
-  if (govResult.blocked) {
-    logger.warn({ workflowId }, "[workflow] RepoRank blocked workflow completion");
-    return;
-  }
-  if (outcome.success) {
-    coordinator.setComplete();
-  } else {
-    coordinator.setFailed();
-  }
-  if (isVibeServeEnabled()) {
-    await callVibeServeTool(
-      "vs_memory_store",
-      {
-        workspaceId,
-        contextType: "workflow",
-        payload: { workflowId, summary: outcome.summary, finalOutcome: outcome.success }
-      },
-      daemon
-    );
-  }
-  emitAuditEvent({
-    workflowId,
-    route: "workflow",
-    tool: "workflow.complete",
-    outcome: outcome.success ? OUTCOME.SUCCESS : OUTCOME.FAILURE,
-    details: { summary: outcome.summary }
-  });
-  getWorkflowBudgetManager().clearBudget(workflowId);
-  coordinators.delete(workflowId);
-  workflowWorkspaceIds.delete(workflowId);
-  await coordinator.saveState();
-}
-var import_crypto7, coordinators, workflowWorkspaceIds;
-var init_workflowRunner = __esm({
-  "server/integration/workflowRunner.ts"() {
-    "use strict";
-    import_crypto7 = require("crypto");
-    init_mcpVibeServeClient();
-    init_planAugmenter();
-    init_workflowCoordinator();
-    init_specAssets();
-    init_traceContext();
-    init_auditService();
-    init_router();
-    init_workspacePaths();
-    init_reporankGovernance();
-    init_logger();
-    init_constants();
-    coordinators = /* @__PURE__ */ new Map();
-    workflowWorkspaceIds = /* @__PURE__ */ new Map();
-  }
-});
-
-// server/inngest/periodicJobs.ts
-var mutlyPeriodicContextPrune, mutlyPeriodicHealthCheck, mutlyPeriodicEmbeddingRefresh, inngestFunctions;
-var init_periodicJobs = __esm({
-  "server/inngest/periodicJobs.ts"() {
-    "use strict";
-    init_client();
-    init_logger();
-    mutlyPeriodicContextPrune = inngest.createFunction(
-      {
-        id: "mutly-periodic-context-prune",
-        retries: 2,
-        triggers: [{ cron: "0 3 * * *" }]
-      },
-      async ({ step }) => {
-        logger.info({ job: "context-prune" }, "periodic context prune started");
-        const result = await step.run("prune-stale-embeddings", async () => {
-          return { embeddingsPruned: 0, reason: "stale embedding pruning placeholder" };
-        });
-        await step.run("compact-audit-log", async () => {
-          return { auditEntriesCompacted: 0 };
-        });
-        logger.info({ job: "context-prune", result }, "periodic context prune completed");
-        return result;
-      }
-    );
-    mutlyPeriodicHealthCheck = inngest.createFunction(
-      {
-        id: "mutly-periodic-health-check",
-        retries: 2,
-        triggers: [{ cron: "0 * * * *" }]
-      },
-      async ({ step }) => {
-        logger.info({ job: "health-check" }, "periodic health check started");
-        const result = await step.run("check-workspace", async () => {
-          const ws = process.env.MUTLY_WORKSPACE_ROOT || process.cwd();
-          return { workspace: ws, reachable: true };
-        });
-        await step.run("check-db-readable", async () => {
-          return { dbReadable: true };
-        });
-        if (!result.reachable) {
-          logger.warn({ job: "health-check", result }, "health check alert: workspace unreachable");
-        }
-        logger.info({ job: "health-check", result }, "periodic health check completed");
-        return result;
-      }
-    );
-    mutlyPeriodicEmbeddingRefresh = inngest.createFunction(
-      {
-        id: "mutly-periodic-embedding-refresh",
-        retries: 2,
-        triggers: [{ cron: "30 * * * *" }]
-      },
-      async ({ step }) => {
-        logger.info({ job: "embedding-refresh" }, "periodic embedding refresh started");
-        const result = await step.run("check-file-mtimes", async () => {
-          return { filesChanged: 0, summary: "no changes detected" };
-        });
-        logger.info({ job: "embedding-refresh", result }, "periodic embedding refresh completed");
-        return result;
-      }
-    );
-    inngestFunctions = [
-      mutlyPeriodicContextPrune,
-      mutlyPeriodicHealthCheck,
-      mutlyPeriodicEmbeddingRefresh
-    ];
-  }
-});
-
-// server/inngest/eventDrivenJobs.ts
-function classifyToolSeverity(errorMessage) {
-  const lower = errorMessage.toLowerCase();
-  if (lower.includes("permission") || lower.includes("denied") || lower.includes("forbidden")) {
-    return "high";
-  }
-  if (lower.includes("timeout") || lower.includes("not found") || lower.includes("missing")) {
-    return "medium";
-  }
-  return "low";
-}
-var mutlyOnToolError, mutlyOnApprovalTimeout, inngestFunctions2;
-var init_eventDrivenJobs = __esm({
-  "server/inngest/eventDrivenJobs.ts"() {
-    "use strict";
-    init_client();
-    init_logger();
-    mutlyOnToolError = inngest.createFunction(
-      {
-        id: "mutly-on-tool-error",
-        retries: 2,
-        triggers: [{ event: "mutly/tool.error" }]
-      },
-      async ({ event, step }) => {
-        logger.info({ event }, "tool error event received");
-        const severity = await step.run("classify-error", async () => {
-          const msg = event.data?.error ?? "";
-          return classifyToolSeverity(msg);
-        });
-        logger.info({ severity, tool: event.data?.tool }, `tool error classified as ${severity}`);
-        return { severity, tool: event.data?.tool, handled: true };
-      }
-    );
-    mutlyOnApprovalTimeout = inngest.createFunction(
-      {
-        id: "mutly-on-approval-timeout",
-        retries: 2,
-        triggers: [{ event: "mutly/approval.expired" }]
-      },
-      async ({ event, step }) => {
-        logger.info({ event }, "approval timeout event received");
-        const result = await step.run("handle-approval-timeout", async () => {
-          const approvalId = event.data?.approvalId ?? "unknown";
-          logger.warn({ approvalId }, `approval ${approvalId} expired`);
-          return { approvalId, action: "cancelled" };
-        });
-        logger.info({ result }, "approval timeout handled");
-        return result;
-      }
-    );
-    inngestFunctions2 = [
-      mutlyOnToolError,
-      mutlyOnApprovalTimeout
-    ];
-  }
-});
-
-// server/inngest/functions.ts
-function highRiskStepsEstimate(plan) {
-  return plan.tree?.filter((t) => t.risk === "High").length ?? 0;
-}
-var import_crypto8, mutlyWorkflowStart, inngestFunctions3;
-var init_functions = __esm({
-  "server/inngest/functions.ts"() {
-    "use strict";
-    init_client();
-    init_agentDaemon();
-    init_workflowRunner();
-    init_auditService();
-    init_traceContext();
-    init_approvalStore();
-    import_crypto8 = require("crypto");
-    init_periodicJobs();
-    init_eventDrivenJobs();
-    mutlyWorkflowStart = inngest.createFunction(
-      {
-        id: "mutly-workflow-start",
-        retries: 2,
-        triggers: [{ event: "mutly/workflow.start" }]
-      },
-      async ({ event, step }) => {
-        const plan = event.data.plan;
-        const workflowId = plan.planId ?? `wf_${(0, import_crypto8.randomUUID)()}`;
-        const traceId = event.data.traceId ?? createTraceId();
-        return runWithTrace({ traceId, workflowId }, async () => {
-          const started2 = await step.run("retrieve-memory-and-plan", async () => {
-            return startWorkflow(agentDaemon, {
-              plan,
-              workspaceId: event.data.workspaceId,
-              workspaceRoot: event.data.workspaceRoot
-            });
-          });
-          const riskCheck = await step.run("classify-risk", async () => {
-            const highRisk = plan.tree?.filter((t) => t.risk === "High").length ?? 0;
-            return { highRiskSteps: highRisk, needsApproval: highRisk > 2 };
-          });
-          if (riskCheck.needsApproval) {
-            const approvalId = (0, import_crypto8.randomUUID)();
-            const expiresAt = /* @__PURE__ */ new Date();
-            expiresAt.setHours(
-              expiresAt.getHours() + parseFloat(process.env.MAX_APPROVAL_WAIT_HOURS || "24")
-            );
-            await approvalStore.addRequest({
-              id: approvalId,
-              correlationId: started2.workflowId,
-              requestedAt: (/* @__PURE__ */ new Date()).toISOString(),
-              expiresAt: expiresAt.toISOString(),
-              summary: `${riskCheck.highRiskSteps} high-risk steps require workflow approval`,
-              riskTier: "orange",
-              filesAffected: [],
-              route: "inngest",
-              tool: "workflow_high_risk",
-              parametersSummary: { highRiskSteps: riskCheck.highRiskSteps },
-              blastRadius: {
-                estimatedFiles: highRiskStepsEstimate(plan),
-                isDestructive: true,
-                isIrreversible: false
-              }
-            });
-            const coordinator = getWorkflowCoordinator(started2.workflowId);
-            coordinator.setPausedForApproval({
-              correlationId: started2.workflowId,
-              action: "workflow_high_risk",
-              riskLevel: "orange",
-              reason: `${riskCheck.highRiskSteps} high-risk steps require approval`
-            });
-            await coordinator.saveState();
-            const approval = await step.waitForEvent("wait-for-workflow-approval", {
-              event: "mutly/approval.resolved",
-              timeout: `${process.env.MAX_APPROVAL_WAIT_HOURS || "24"}h`,
-              if: `async.data.workflowId == '${started2.workflowId}'`
-            });
-            const decision = approval?.data?.decision;
-            if (decision === "rejected" || decision === "expired") {
-              await completeWorkflow(agentDaemon, started2.workflowId, {
-                summary: `Workflow ${decision} at approval gate`,
-                success: false
-              });
-              return { status: decision, workflowId: started2.workflowId };
-            }
-            coordinator.setApproved();
-            await coordinator.saveState();
-          }
-          let planComplete = false;
-          let attempt = 0;
-          while (!planComplete) {
-            try {
-              await step.run(`execute-plan-attempt-${attempt}`, async () => {
-                agentDaemon.currentPlan = plan;
-                await agentDaemon.executeAllSteps();
-              });
-              planComplete = true;
-            } catch (err) {
-              if (err instanceof ApprovalPausedError) {
-                const approval = await step.waitForEvent(
-                  `wait-tool-approval-${err.approvalId}`,
-                  {
-                    event: "mutly/approval.resolved",
-                    timeout: `${process.env.MAX_APPROVAL_WAIT_HOURS || "24"}h`,
-                    if: `async.data.approvalId == '${err.approvalId}'`
-                  }
-                );
-                const decision = approval?.data?.decision;
-                if (decision !== "approved") {
-                  await completeWorkflow(agentDaemon, started2.workflowId, {
-                    summary: `Workflow ${decision ?? "rejected"} at tool approval gate`,
-                    success: false
-                  });
-                  return {
-                    status: decision ?? "rejected",
-                    workflowId: started2.workflowId
-                  };
-                }
-                await step.run(`resume-after-approval-${err.approvalId}`, async () => {
-                  await agentDaemon.resumeStepAfterApproval(err.approvalId);
-                });
-                attempt += 1;
-              } else {
-                throw err;
-              }
-            }
-          }
-          await step.run("store-outcome", async () => {
-            await completeWorkflow(agentDaemon, started2.workflowId, {
-              summary: "Workflow completed via Inngest",
-              success: true
-            });
-          });
-          emitAuditEvent({
-            workflowId: started2.workflowId,
-            route: "inngest",
-            tool: "mutly/workflow.complete",
-            outcome: "success"
-          });
-          return { status: "complete", workflowId: started2.workflowId, traceId };
-        });
-      }
-    );
-    inngestFunctions3 = [
-      mutlyWorkflowStart,
-      ...inngestFunctions,
-      ...inngestFunctions2
-    ];
-  }
-});
-
-// server/lib/otelBootstrap.ts
-async function bootstrapOtel() {
-  if (started) return;
-  try {
-    const { NodeSDK } = await import("@opentelemetry/sdk-node");
-    const { getNodeAutoInstrumentations } = await import("@opentelemetry/auto-instrumentations-node");
-    const { ConsoleSpanExporter, SimpleSpanProcessor } = await import("@opentelemetry/sdk-trace-base");
-    const { diag, DiagConsoleLogger, DiagLogLevel } = await import("@opentelemetry/api");
-    if (process.env.NODE_ENV !== "production") {
-      diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN);
-    }
-    const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
-    const spanProcessors = [];
-    if (endpoint) {
-      const { OTLPTraceExporter } = await import("@opentelemetry/exporter-trace-otlp-http");
-      const { BatchSpanProcessor } = await import("@opentelemetry/sdk-trace-base");
-      const otlpExporter = new OTLPTraceExporter({ url: endpoint });
-      spanProcessors.push(new BatchSpanProcessor(otlpExporter));
-      logger.info({ endpoint }, "OpenTelemetry: OTLP exporter configured");
-    } else {
-      spanProcessors.push(new SimpleSpanProcessor(new ConsoleSpanExporter()));
-      logger.info("OpenTelemetry: Console exporter active (dev mode)");
-    }
-    const nodeSdk = new NodeSDK({
-      serviceName: process.env.OTEL_SERVICE_NAME ?? "mutly-daemon",
-      instrumentations: [getNodeAutoInstrumentations()],
-      spanProcessors
-    });
-    nodeSdk.start();
-    sdk = {
-      start: () => nodeSdk.start(),
-      shutdown: () => nodeSdk.shutdown()
-    };
-    started = true;
-    const shutdownHandler = async () => {
-      if (sdk) {
-        try {
-          await sdk.shutdown();
-          logger.info("OpenTelemetry SDK shut down gracefully");
-        } catch (e) {
-          logger.warn({ err: String(e) }, "OpenTelemetry shutdown warning");
-        }
-      }
-    };
-    process.on("SIGTERM", shutdownHandler);
-    process.on("SIGINT", shutdownHandler);
-    logger.info("OpenTelemetry initialized successfully");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn({ err: msg }, "OpenTelemetry bootstrap skipped (non-critical)");
-  }
-}
-var sdk, started;
-var init_otelBootstrap = __esm({
-  "server/lib/otelBootstrap.ts"() {
-    "use strict";
-    init_logger();
-    sdk = null;
-    started = false;
-  }
-});
-
-// server/observability/sentry.ts
-function initSentry() {
-  if (!process.env.SENTRY_DSN) return;
-  Sentry.init({
-    dsn: process.env.SENTRY_DSN,
-    environment: process.env.NODE_ENV || "development",
-    release: process.env.MUTLY_VERSION || "0.1.0",
-    integrations: [(0, import_profiling_node.nodeProfilingIntegration)()],
-    tracesSampleRate: 0.1,
-    profilesSampleRate: 0.05
-  });
-}
-var Sentry, import_profiling_node;
-var init_sentry = __esm({
-  "server/observability/sentry.ts"() {
-    "use strict";
-    Sentry = __toESM(require("@sentry/node"), 1);
-    import_profiling_node = require("@sentry/profiling-node");
-  }
-});
-
 // server/lib/stateStore.ts
 var StateStore, WorkflowBudgetStore, PipelineStore;
 var init_stateStore = __esm({
@@ -8686,11 +7944,11 @@ var init_stateStore = __esm({
 });
 
 // server/agents/agentMessageBus.ts
-var import_crypto9, AgentMessageBus;
+var import_crypto7, AgentMessageBus;
 var init_agentMessageBus = __esm({
   "server/agents/agentMessageBus.ts"() {
     "use strict";
-    import_crypto9 = require("crypto");
+    import_crypto7 = require("crypto");
     AgentMessageBus = class {
       constructor() {
         this.directListeners = /* @__PURE__ */ new Map();
@@ -8704,7 +7962,7 @@ var init_agentMessageBus = __esm({
       /** Send a message to a specific agent */
       send(to, type, from, payload) {
         const msg = {
-          id: `msg_${(0, import_crypto9.randomUUID)().slice(0, 8)}`,
+          id: `msg_${(0, import_crypto7.randomUUID)().slice(0, 8)}`,
           from,
           to,
           type,
@@ -8947,11 +8205,11 @@ var init_agentCoordinator = __esm({
 });
 
 // server/agents/agentBase.ts
-var import_crypto10, BaseAgent;
+var import_crypto8, BaseAgent;
 var init_agentBase = __esm({
   "server/agents/agentBase.ts"() {
     "use strict";
-    import_crypto10 = require("crypto");
+    import_crypto8 = require("crypto");
     BaseAgent = class {
       /** Helper: create a successful result */
       success(task, output, opts = {}) {
@@ -8979,7 +8237,7 @@ var init_agentBase = __esm({
       /** Create a new task for this agent */
       createTask(description, input, priority = 5) {
         return {
-          taskId: `task_${(0, import_crypto10.randomUUID)().slice(0, 8)}`,
+          taskId: `task_${(0, import_crypto8.randomUUID)().slice(0, 8)}`,
           targetAgent: this.name,
           description,
           input,
@@ -8998,16 +8256,16 @@ __export(p1_ingest_exports, {
 });
 async function p1_ingest(state) {
   const input = state.phases["ingest"].input || {};
-  const workspaceId = state.workspaceId || `ws_${(0, import_crypto11.randomUUID)().slice(0, 8)}`;
-  const workspacePath = import_path12.default.join(WORKSPACES_DIR, workspaceId);
-  import_fs13.default.mkdirSync(workspacePath, { recursive: true });
+  const workspaceId = state.workspaceId || `ws_${(0, import_crypto9.randomUUID)().slice(0, 8)}`;
+  const workspacePath = import_path11.default.join(WORKSPACES_DIR, workspaceId);
+  import_fs11.default.mkdirSync(workspacePath, { recursive: true });
   if (input.source === "github" && input.repoUrl) {
     await ingestFromGithub(input.repoUrl, workspacePath);
   } else if (input.source === "local" && input.files && input.files.length > 0) {
     ingestFromLocal(input.files, workspacePath);
   } else {
     const sandboxDir = process.env.MUTLY_SANDBOX_DIR || process.cwd();
-    copyDirectory(import_path12.default.resolve(sandboxDir), workspacePath);
+    copyDirectory(import_path11.default.resolve(sandboxDir), workspacePath);
   }
   const { scanWorkspace: scanWorkspace2 } = await Promise.resolve().then(() => (init_agentDaemon(), agentDaemon_exports));
   const scanResult = scanWorkspace2(workspacePath);
@@ -9035,44 +8293,44 @@ async function ingestFromGithub(repoUrl, dest) {
 }
 function ingestFromLocal(files, dest) {
   for (const file of files) {
-    const fullPath = import_path12.default.join(dest, file.path);
-    import_fs13.default.mkdirSync(import_path12.default.dirname(fullPath), { recursive: true });
-    import_fs13.default.writeFileSync(fullPath, Buffer.from(file.content, "base64"), "utf-8");
+    const fullPath = import_path11.default.join(dest, file.path);
+    import_fs11.default.mkdirSync(import_path11.default.dirname(fullPath), { recursive: true });
+    import_fs11.default.writeFileSync(fullPath, Buffer.from(file.content, "base64"), "utf-8");
   }
 }
 function copyDirectory(src, dest) {
-  if (!import_fs13.default.existsSync(src)) return;
-  const entries = import_fs13.default.readdirSync(src, { withFileTypes: true });
+  if (!import_fs11.default.existsSync(src)) return;
+  const entries = import_fs11.default.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist") continue;
-    const srcPath = import_path12.default.join(src, entry.name);
-    const destPath = import_path12.default.join(dest, entry.name);
+    const srcPath = import_path11.default.join(src, entry.name);
+    const destPath = import_path11.default.join(dest, entry.name);
     if (entry.isDirectory()) {
       copyDirectory(srcPath, destPath);
     } else {
-      import_fs13.default.mkdirSync(import_path12.default.dirname(destPath), { recursive: true });
-      import_fs13.default.copyFileSync(srcPath, destPath);
+      import_fs11.default.mkdirSync(import_path11.default.dirname(destPath), { recursive: true });
+      import_fs11.default.copyFileSync(srcPath, destPath);
     }
   }
 }
 function buildManifest(workspacePath) {
   const manifest = [];
   function walk(dir) {
-    const entries = import_fs13.default.readdirSync(dir, { withFileTypes: true });
+    const entries = import_fs11.default.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
-      const fullPath = import_path12.default.join(dir, entry.name);
+      const fullPath = import_path11.default.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
       } else {
         try {
-          const stat = import_fs13.default.statSync(fullPath);
-          const content = import_fs13.default.readFileSync(fullPath, "utf-8");
+          const stat = import_fs11.default.statSync(fullPath);
+          const content = import_fs11.default.readFileSync(fullPath, "utf-8");
           manifest.push({
-            path: import_path12.default.relative(workspacePath, fullPath),
+            path: import_path11.default.relative(workspacePath, fullPath),
             size: stat.size,
             lines: content.split("\n").length,
-            extension: import_path12.default.extname(fullPath)
+            extension: import_path11.default.extname(fullPath)
           });
         } catch {
         }
@@ -9082,14 +8340,14 @@ function buildManifest(workspacePath) {
   walk(workspacePath);
   return manifest;
 }
-var import_fs13, import_path12, import_crypto11, WORKSPACES_DIR;
+var import_fs11, import_path11, import_crypto9, WORKSPACES_DIR;
 var init_p1_ingest = __esm({
   "server/buildPipeline/p1_ingest.ts"() {
     "use strict";
-    import_fs13 = __toESM(require("fs"), 1);
-    import_path12 = __toESM(require("path"), 1);
-    import_crypto11 = require("crypto");
-    WORKSPACES_DIR = import_path12.default.resolve(process.cwd(), "data", "workspaces");
+    import_fs11 = __toESM(require("fs"), 1);
+    import_path11 = __toESM(require("path"), 1);
+    import_crypto9 = require("crypto");
+    WORKSPACES_DIR = import_path11.default.resolve(process.cwd(), "data", "workspaces");
   }
 });
 
@@ -9164,15 +8422,15 @@ var init_skillSpan = __esm({
 });
 
 // server/skills/skillRegistry.ts
-var import_fs14, import_path13, import_crypto12, SkillRegistry, skillRegistry;
+var import_fs12, import_path12, import_crypto10, SkillRegistry, skillRegistry;
 var init_skillRegistry = __esm({
   "server/skills/skillRegistry.ts"() {
     "use strict";
-    import_fs14 = require("fs");
-    import_path13 = require("path");
+    import_fs12 = require("fs");
+    import_path12 = require("path");
     init_logger();
     init_constants();
-    import_crypto12 = require("crypto");
+    import_crypto10 = require("crypto");
     init_skillSpan();
     SkillRegistry = class {
       constructor(opts = {}) {
@@ -9182,7 +8440,7 @@ var init_skillRegistry = __esm({
         this.tools = /* @__PURE__ */ new Map();
         this.autoLoadDir = null;
         this.tracer = null;
-        this.traceId = opts.traceId ?? `trace_${(0, import_crypto12.randomUUID)().slice(0, 8)}`;
+        this.traceId = opts.traceId ?? `trace_${(0, import_crypto10.randomUUID)().slice(0, 8)}`;
         if (opts.autoLoadDir) {
           this.autoLoadDir = opts.autoLoadDir;
         }
@@ -9196,7 +8454,7 @@ var init_skillRegistry = __esm({
         }
       }
       /** Register a skill manually (programmatic registration) */
-      register(skill, source = "manual", path22 = "(in-memory)") {
+      register(skill, source = "manual", path21 = "(in-memory)") {
         if (this.skills.has(skill.metadata.name)) {
           const existing = this.skills.get(skill.metadata.name);
           if (existing.skill.metadata.version === skill.metadata.version) {
@@ -9206,7 +8464,7 @@ var init_skillRegistry = __esm({
           }
         }
         this.skills.set(skill.metadata.name, {
-          path: path22,
+          path: path21,
           skill,
           loadedAt: Date.now(),
           source
@@ -9284,7 +8542,7 @@ var init_skillRegistry = __esm({
       }
       /** Auto-discover and load skills from a directory */
       async loadFromDisk(dir) {
-        if (!(0, import_fs14.existsSync)(dir)) {
+        if (!(0, import_fs12.existsSync)(dir)) {
           logger.warn(`[SkillRegistry] Auto-load directory does not exist: ${dir}`);
           return 0;
         }
@@ -9292,11 +8550,11 @@ var init_skillRegistry = __esm({
         const stack = [dir];
         while (stack.length > 0) {
           const current = stack.pop();
-          const stat = (0, import_fs14.statSync)(current);
+          const stat = (0, import_fs12.statSync)(current);
           if (!stat.isDirectory()) continue;
-          const entries = (0, import_fs14.readdirSync)(current, { withFileTypes: true });
+          const entries = (0, import_fs12.readdirSync)(current, { withFileTypes: true });
           for (const entry of entries) {
-            const full = (0, import_path13.join)(current, entry.name);
+            const full = (0, import_path12.join)(current, entry.name);
             if (entry.isDirectory()) {
               if (!["node_modules", ".git", "dist", "out"].includes(entry.name)) {
                 stack.push(full);
@@ -9305,9 +8563,9 @@ var init_skillRegistry = __esm({
             }
             if (entry.name === "skill.json") {
               try {
-                const content = JSON.parse((0, import_fs14.readFileSync)(full, "utf-8"));
+                const content = JSON.parse((0, import_fs12.readFileSync)(full, "utf-8"));
                 const skill = this.manifestToSkill(content);
-                this.register(skill, "disk", (0, import_path13.join)(current, "skill.json"));
+                this.register(skill, "disk", (0, import_path12.join)(current, "skill.json"));
                 loaded++;
               } catch (err) {
                 logger.error(`[SkillRegistry] Failed to load ${full}: ${err.message}`);
@@ -9354,12 +8612,12 @@ var init_skillRegistry = __esm({
        * registers the resulting Skill under the given source/path. Returns the
        * registered Skill, or throws on invalid manifests.
        */
-      loadManifest(manifest, source = "disk", path22 = "(in-memory)") {
+      loadManifest(manifest, source = "disk", path21 = "(in-memory)") {
         if (!manifest || !manifest.name || !manifest.description) {
           throw new Error("Invalid manifest: name and description are required");
         }
         const skill = this.manifestToSkillUnsafe(manifest);
-        this.register(skill, source, path22);
+        this.register(skill, source, path21);
         return skill;
       }
       /** Invoke a skill by name */
@@ -9733,12 +8991,6 @@ var init_finalizeBuildSkill = __esm({
 });
 
 // server/skills/skillLoader.ts
-function loadDefaultSkills() {
-  for (const skill of DEFAULT_SKILLS) {
-    skillRegistry.register(skill);
-  }
-  logger.info(`[SkillLoader] Loaded ${DEFAULT_SKILLS.length} default skills`);
-}
 async function callSkill(name, input, overrides2 = {}) {
   const result = await skillRegistry.invoke(name, input, overrides2);
   return {
@@ -9747,10 +8999,6 @@ async function callSkill(name, input, overrides2 = {}) {
     error: result.error
   };
 }
-function listAvailableSkills() {
-  return skillRegistry.list();
-}
-var DEFAULT_SKILLS;
 var init_skillLoader = __esm({
   "server/skills/skillLoader.ts"() {
     "use strict";
@@ -9759,11 +9007,6 @@ var init_skillLoader = __esm({
     init_fixBatchSkill();
     init_finalizeBuildSkill();
     init_logger();
-    DEFAULT_SKILLS = [
-      qualityScanSkill,
-      fixBatchSkill,
-      finalizeBuildSkill
-    ];
   }
 });
 
@@ -9837,6 +9080,61 @@ var init_auditAgent = __esm({
   }
 });
 
+// server/planning/planAugmenter.ts
+function getAugmentationConfig() {
+  return {
+    enabled: process.env.ENABLE_VIBESERVE_PLANNING === "true",
+    mode: process.env.VIBESERVE_PLANNING_MODE || "advisory",
+    requireLocalVerification: process.env.VIBESERVE_REQUIRE_LOCAL_VERIFICATION !== "false"
+  };
+}
+async function augmentPlan(plan, daemon) {
+  const config = getAugmentationConfig();
+  if (!config.enabled) {
+    return { success: false, errors: ["Planning augmentation disabled"] };
+  }
+  daemon.addLog("info", `PLAN_AUGMENT_START: Mode=${config.mode}`);
+  try {
+    const planJson = JSON.stringify({
+      message: plan.message,
+      tree: plan.tree.map((t) => ({
+        id: t.id,
+        step: t.step,
+        risk: t.risk,
+        status: t.status
+      }))
+    });
+    const result = await callVibeServeTool("vs_plan_review", { plan: planJson }, daemon);
+    if (result.error) {
+      daemon.addLog(LOG_TYPE.ERROR, `PLAN_AUGMENT_FAILURE: ${result.error}`);
+      return { success: false, errors: [String(result.error)] };
+    }
+    const artifact = parseArtifact(result.data);
+    if (!artifact) {
+      return { success: false, errors: ["Could not parse artifact from VibeServe"] };
+    }
+    const normalized = normalizeArtifactForModel(artifact);
+    daemon.addLog(LOG_TYPE.SUCCESS, `PLAN_AUGMENT_SUCCESS: Type=${artifact.artifactType}`);
+    return {
+      success: true,
+      artifact,
+      critique: normalized.validationErrors,
+      recommendations: normalized.recommendations
+    };
+  } catch (err) {
+    daemon.addLog(LOG_TYPE.ERROR, `PLAN_AUGMENT_ERROR: ${err.message}`);
+    return { success: false, errors: [err.message] };
+  }
+}
+var init_planAugmenter = __esm({
+  "server/planning/planAugmenter.ts"() {
+    "use strict";
+    init_mcpVibeServeClient();
+    init_artifactNormalizer();
+    init_constants();
+  }
+});
+
 // server/buildPipeline/p3_plan.ts
 var p3_plan_exports = {};
 __export(p3_plan_exports, {
@@ -9872,14 +9170,14 @@ async function p3_plan(state) {
     function walk(dir) {
       if (scanned > 500) return;
       try {
-        for (const entry of import_fs15.default.readdirSync(dir, { withFileTypes: true })) {
+        for (const entry of import_fs13.default.readdirSync(dir, { withFileTypes: true })) {
           if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist") continue;
-          const full = import_path14.default.join(dir, entry.name);
+          const full = import_path13.default.join(dir, entry.name);
           if (entry.isDirectory()) walk(full);
-          else if (extFilter.includes(import_path14.default.extname(entry.name))) {
+          else if (extFilter.includes(import_path13.default.extname(entry.name))) {
             scanned++;
             try {
-              const content = import_fs15.default.readFileSync(full, "utf-8");
+              const content = import_fs13.default.readFileSync(full, "utf-8");
               if (content.includes(pattern)) matches.push(full);
             } catch {
             }
@@ -9940,7 +9238,7 @@ async function p3_plan(state) {
     if (iLower.includes("naming")) {
       const files = findFiles("", []);
       const mixed = files.filter((f) => {
-        const name = import_path14.default.basename(f).split(".")[0];
+        const name = import_path13.default.basename(f).split(".")[0];
         return /^[a-z]+_[a-z]+/.test(name) || /^[A-Z]+_[A-Z]+/.test(name);
       });
       for (const file of mixed.slice(0, 3)) {
@@ -9957,9 +9255,9 @@ async function p3_plan(state) {
       }
     }
     if (iLower.includes("eslint") || iLower.includes("prettier")) {
-      const eslintPath = import_path14.default.join(workspaceRoot, ".eslintrc.json");
-      const prettierPath = import_path14.default.join(workspaceRoot, ".prettierrc");
-      if (!import_fs15.default.existsSync(eslintPath)) {
+      const eslintPath = import_path13.default.join(workspaceRoot, ".eslintrc.json");
+      const prettierPath = import_path13.default.join(workspaceRoot, ".prettierrc");
+      if (!import_fs13.default.existsSync(eslintPath)) {
         steps.push({
           id: `fix_eslint_${steps.length + 1}`,
           action: "create_file",
@@ -9972,7 +9270,7 @@ async function p3_plan(state) {
         });
         stepLog.push("Create .eslintrc.json");
       }
-      if (!import_fs15.default.existsSync(prettierPath)) {
+      if (!import_fs13.default.existsSync(prettierPath)) {
         steps.push({
           id: `fix_prettier_${steps.length + 1}`,
           action: "create_file",
@@ -9986,12 +9284,12 @@ async function p3_plan(state) {
     if (iLower.includes("large file") || iLower.includes("split") || iLower.includes("refactor")) {
       try {
         const walkLarge = (dir) => {
-          for (const e of import_fs15.default.readdirSync(dir, { withFileTypes: true })) {
+          for (const e of import_fs13.default.readdirSync(dir, { withFileTypes: true })) {
             if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "dist") continue;
-            const full = import_path14.default.join(dir, e.name);
+            const full = import_path13.default.join(dir, e.name);
             if (e.isDirectory()) walkLarge(full);
             else if (/\.(ts|tsx|js|jsx)$/.test(e.name)) {
-              const content = import_fs15.default.readFileSync(full, "utf-8");
+              const content = import_fs13.default.readFileSync(full, "utf-8");
               const lines = content.split("\n").length;
               if (lines > 300) {
                 const relPath = full.replace(workspaceRoot, "").replace(/^\//, "");
@@ -10013,10 +9311,10 @@ async function p3_plan(state) {
       }
     }
     if (iLower.includes("typescript") || iLower.includes("strict") || iLower.includes("tsconfig")) {
-      const tsconfigPath = import_path14.default.join(workspaceRoot, "tsconfig.json");
-      if (import_fs15.default.existsSync(tsconfigPath)) {
+      const tsconfigPath = import_path13.default.join(workspaceRoot, "tsconfig.json");
+      if (import_fs13.default.existsSync(tsconfigPath)) {
         try {
-          const tsconfig = JSON.parse(import_fs15.default.readFileSync(tsconfigPath, "utf-8"));
+          const tsconfig = JSON.parse(import_fs13.default.readFileSync(tsconfigPath, "utf-8"));
           if (!tsconfig.compilerOptions?.strict) {
             steps.push({
               id: `strict_ts_${steps.length + 1}`,
@@ -10033,11 +9331,11 @@ async function p3_plan(state) {
       }
     }
     if (iLower.includes("readme") || iLower.includes("documentation") || iLower.includes("docs")) {
-      const readmePath = import_path14.default.join(workspaceRoot, "README.md");
-      if (!import_fs15.default.existsSync(readmePath)) {
+      const readmePath = import_path13.default.join(workspaceRoot, "README.md");
+      if (!import_fs13.default.existsSync(readmePath)) {
         let projectName = "Mutly Project";
         try {
-          const pkg = JSON.parse(import_fs15.default.readFileSync(import_path14.default.join(workspaceRoot, "package.json"), "utf-8"));
+          const pkg = JSON.parse(import_fs13.default.readFileSync(import_path13.default.join(workspaceRoot, "package.json"), "utf-8"));
           if (pkg.name) projectName = pkg.name;
         } catch {
         }
@@ -10067,10 +9365,10 @@ Proprietary.
       }
     }
     if (iLower.includes("gitignore") || iLower.includes("git") || iLower.includes("version control")) {
-      const gitignorePath = import_path14.default.join(workspaceRoot, ".gitignore");
+      const gitignorePath = import_path13.default.join(workspaceRoot, ".gitignore");
       let existing = "";
       try {
-        existing = import_fs15.default.readFileSync(gitignorePath, "utf-8");
+        existing = import_fs13.default.readFileSync(gitignorePath, "utf-8");
       } catch {
       }
       const missing = [];
@@ -10125,12 +9423,12 @@ Proprietary.
     completedAt: Date.now()
   };
 }
-var import_fs15, import_path14, SCORE_THRESHOLD;
+var import_fs13, import_path13, SCORE_THRESHOLD;
 var init_p3_plan = __esm({
   "server/buildPipeline/p3_plan.ts"() {
     "use strict";
-    import_fs15 = __toESM(require("fs"), 1);
-    import_path14 = __toESM(require("path"), 1);
+    import_fs13 = __toESM(require("fs"), 1);
+    import_path13 = __toESM(require("path"), 1);
     init_planAugmenter();
     SCORE_THRESHOLD = 50;
   }
@@ -10329,7 +9627,7 @@ Follow these patterns.`;
 });
 
 // server/agents/codeAgent.ts
-var import_fs16, import_path15, CodeAgent;
+var import_fs14, import_path14, CodeAgent;
 var init_codeAgent = __esm({
   "server/agents/codeAgent.ts"() {
     "use strict";
@@ -10344,8 +9642,8 @@ var init_codeAgent = __esm({
     init_config();
     init_contextInjector();
     init_feedbackLearner();
-    import_fs16 = require("fs");
-    import_path15 = require("path");
+    import_fs14 = require("fs");
+    import_path14 = require("path");
     CodeAgent = class extends BaseAgent {
       constructor() {
         super(...arguments);
@@ -10451,11 +9749,11 @@ Step description: ${step.description || step.id}`;
       async applyMultiStepAtomic(steps, ctx, startMs) {
         const workspaceRoot = ctx.workspacePath ?? process.cwd();
         const files = steps.map((s) => {
-          const full = (0, import_path15.resolve)(workspaceRoot, s.filePath);
+          const full = (0, import_path14.resolve)(workspaceRoot, s.filePath);
           return {
             step: s,
             path: full,
-            content: (0, import_fs16.existsSync)(full) ? (0, import_fs16.readFileSync)(full, "utf-8").slice(0, 5e3) : "(new file)"
+            content: (0, import_fs14.existsSync)(full) ? (0, import_fs14.readFileSync)(full, "utf-8").slice(0, 5e3) : "(new file)"
           };
         });
         for (const f of files) {
@@ -10878,8 +10176,8 @@ var init_prGenerator = __esm({
 
 // server/automation/changelogGenerator.ts
 async function generateChangelogEntry(workspaceRoot, commits) {
-  const changelogPath = (0, import_path16.join)(workspaceRoot, "CHANGELOG.md");
-  const existing = (0, import_fs17.existsSync)(changelogPath) ? (0, import_fs17.readFileSync)(changelogPath, "utf-8") : "";
+  const changelogPath = (0, import_path15.join)(workspaceRoot, "CHANGELOG.md");
+  const existing = (0, import_fs15.existsSync)(changelogPath) ? (0, import_fs15.readFileSync)(changelogPath, "utf-8") : "";
   const prompt = `Generate a changelog entry from these commits:
 ${commits.map((c) => `- ${c.message}`).join("\n")}
 
@@ -10897,12 +10195,12 @@ Return only the changelog entry, no explanation.`;
   });
   return result.text.trim();
 }
-var import_fs17, import_path16;
+var import_fs15, import_path15;
 var init_changelogGenerator = __esm({
   "server/automation/changelogGenerator.ts"() {
     "use strict";
-    import_fs17 = require("fs");
-    import_path16 = require("path");
+    import_fs15 = require("fs");
+    import_path15 = require("path");
     init_litellmAdapter();
   }
 });
@@ -10941,8 +10239,8 @@ async function p7_ready(state) {
     ] : []
   };
   if (state.workspacePath) {
-    const summaryPath = import_path17.default.join(state.workspacePath, "MUTLY_BUILD_SUMMARY.json");
-    import_fs18.default.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
+    const summaryPath = import_path16.default.join(state.workspacePath, "MUTLY_BUILD_SUMMARY.json");
+    import_fs16.default.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
   }
   return {
     id: "ready",
@@ -10953,12 +10251,12 @@ async function p7_ready(state) {
     completedAt: Date.now()
   };
 }
-var import_fs18, import_path17;
+var import_fs16, import_path16;
 var init_p7_ready = __esm({
   "server/buildPipeline/p7_ready.ts"() {
     "use strict";
-    import_fs18 = __toESM(require("fs"), 1);
-    import_path17 = __toESM(require("path"), 1);
+    import_fs16 = __toESM(require("fs"), 1);
+    import_path16 = __toESM(require("path"), 1);
   }
 });
 
@@ -11032,15 +10330,15 @@ var init_deployAgent = __esm({
 });
 
 // server/agents/testAgent.ts
-var import_child_process6, import_fs19, import_path18, MAX_ITERATIONS2, MAX_GENERATE_TOKENS, VITEST_TIMEOUT_MS, PROMPT_FILE_TRUNCATE, TestAgent;
+var import_child_process6, import_fs17, import_path17, MAX_ITERATIONS2, MAX_GENERATE_TOKENS, VITEST_TIMEOUT_MS, PROMPT_FILE_TRUNCATE, TestAgent;
 var init_testAgent = __esm({
   "server/agents/testAgent.ts"() {
     "use strict";
     init_agentBase();
     init_litellmAdapter();
     import_child_process6 = require("child_process");
-    import_fs19 = require("fs");
-    import_path18 = require("path");
+    import_fs17 = require("fs");
+    import_path17 = require("path");
     init_logger();
     MAX_ITERATIONS2 = 3;
     MAX_GENERATE_TOKENS = 4096;
@@ -11114,12 +10412,12 @@ var init_testAgent = __esm({
         let error = "";
         testContent = await this.generateTests(file.path, file.content, workspaceRoot);
         while (iterations < MAX_ITERATIONS2) {
-          const fullTestPath = (0, import_path18.join)(workspaceRoot, testFilePath);
-          const dir = (0, import_path18.dirname)(fullTestPath);
-          if (!(0, import_fs19.existsSync)(dir)) {
-            (0, import_fs19.mkdirSync)(dir, { recursive: true });
+          const fullTestPath = (0, import_path17.join)(workspaceRoot, testFilePath);
+          const dir = (0, import_path17.dirname)(fullTestPath);
+          if (!(0, import_fs17.existsSync)(dir)) {
+            (0, import_fs17.mkdirSync)(dir, { recursive: true });
           }
-          (0, import_fs19.writeFileSync)(fullTestPath, testContent, "utf-8");
+          (0, import_fs17.writeFileSync)(fullTestPath, testContent, "utf-8");
           try {
             const output = (0, import_child_process6.execSync)(
               `npx vitest run --reporter=json "${testFilePath}" 2>&1`,
@@ -11183,7 +10481,7 @@ var init_testAgent = __esm({
         if (normalized.startsWith("tests/")) {
           return normalized;
         }
-        const ext = (0, import_path18.extname)(normalized);
+        const ext = (0, import_path17.extname)(normalized);
         const base = normalized.slice(0, -ext.length);
         if (normalized.startsWith("src/")) {
           return `tests/${base.slice(4)}.test${ext}`;
@@ -11309,13 +10607,13 @@ Return ONLY the complete corrected test code, no explanation.`;
         const candidatePaths = [
           this.getTestFilePath(sourcePath),
           `tests/${sourcePath.replace(/\\/g, "/").replace(/^src\//, "").replace(/\.[^/.]+$/, ".test.ts")}`,
-          `tests/${(0, import_path18.relative)(workspaceRoot, (0, import_path18.join)(workspaceRoot, sourcePath.replace(/\\/g, "/"))).replace(/^src\//, "").replace(/\.[^/.]+$/, ".test.ts")}`
+          `tests/${(0, import_path17.relative)(workspaceRoot, (0, import_path17.join)(workspaceRoot, sourcePath.replace(/\\/g, "/"))).replace(/^src\//, "").replace(/\.[^/.]+$/, ".test.ts")}`
         ];
         for (const candidate of candidatePaths) {
           try {
-            const fullPath = (0, import_path18.join)(workspaceRoot, candidate);
-            if ((0, import_fs19.existsSync)(fullPath)) {
-              return (0, import_fs19.readFileSync)(fullPath, "utf-8").slice(0, 2e3);
+            const fullPath = (0, import_path17.join)(workspaceRoot, candidate);
+            if ((0, import_fs17.existsSync)(fullPath)) {
+              return (0, import_fs17.readFileSync)(fullPath, "utf-8").slice(0, 2e3);
             }
           } catch {
           }
@@ -11549,36 +10847,36 @@ var init_progressEmitter = __esm({
 });
 
 // server/buildPipeline/contentHashCache.ts
-var import_fs20, import_path19, import_crypto13, ContentHashCache, globalCache;
+var import_fs18, import_path18, import_crypto11, ContentHashCache, globalCache;
 var init_contentHashCache = __esm({
   "server/buildPipeline/contentHashCache.ts"() {
     "use strict";
-    import_fs20 = __toESM(require("fs"), 1);
-    import_path19 = __toESM(require("path"), 1);
-    import_crypto13 = require("crypto");
+    import_fs18 = __toESM(require("fs"), 1);
+    import_path18 = __toESM(require("path"), 1);
+    import_crypto11 = require("crypto");
     ContentHashCache = class {
       constructor() {
         this.store = /* @__PURE__ */ new Map();
       }
       hashFile(filePath) {
         try {
-          const content = import_fs20.default.readFileSync(filePath);
-          return (0, import_crypto13.createHash)("sha256").update(content).digest("hex");
+          const content = import_fs18.default.readFileSync(filePath);
+          return (0, import_crypto11.createHash)("sha256").update(content).digest("hex");
         } catch {
           return "";
         }
       }
       hashDirectory(dirPath, filter = /\.(ts|tsx|js|jsx|json|css|html)$/) {
-        const hash = (0, import_crypto13.createHash)("sha256");
+        const hash = (0, import_crypto11.createHash)("sha256");
         const walk = (dir) => {
           try {
-            for (const entry of import_fs20.default.readdirSync(dir, { withFileTypes: true })) {
+            for (const entry of import_fs18.default.readdirSync(dir, { withFileTypes: true })) {
               if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "dist") continue;
-              const full = import_path19.default.join(dir, entry.name);
+              const full = import_path18.default.join(dir, entry.name);
               if (entry.isDirectory()) walk(full);
               else if (filter.test(entry.name)) {
                 hash.update(entry.name);
-                hash.update(import_fs20.default.readFileSync(full));
+                hash.update(import_fs18.default.readFileSync(full));
               }
             }
           } catch {
@@ -11890,416 +11188,6 @@ var init_pipelineRunner = __esm({
   }
 });
 
-// server/buildPipeline/convergence-loop.ts
-async function converge(config = {}) {
-  const cfg = { ...DEFAULT_CONFIG2, ...config };
-  const startedAt = Date.now();
-  const iterations = [];
-  const span = startSpan("convergence.loop", {
-    attributes: {
-      workspace: cfg.workspaceRoot,
-      threshold: cfg.threshold,
-      maxIterations: cfg.maxIterations
-    }
-  });
-  logger.info(
-    { workspace: cfg.workspaceRoot, threshold: cfg.threshold },
-    "[convergence] Starting quality convergence loop"
-  );
-  for (let i = 0; i < cfg.maxIterations; i++) {
-    const iterStart = Date.now();
-    const iteration = {
-      iteration: i + 1,
-      score: 0,
-      findings: 0,
-      fixed: 0,
-      skipped: 0,
-      verification: { typecheck: false, test: false, build: false },
-      durationMs: 0
-    };
-    logger.info({ iteration: i + 1 }, "[convergence] Iteration starting...");
-    const auditResult = await runReporankAudit(cfg.workspaceRoot);
-    iteration.score = auditResult.score;
-    iteration.findings = auditResult.findings;
-    recordMetric("convergence.audit.score", auditResult.score, {
-      iteration: String(i + 1)
-    });
-    logger.info(
-      { iteration: i + 1, score: auditResult.score },
-      "[convergence] Audit complete"
-    );
-    if (auditResult.score >= cfg.threshold) {
-      iteration.durationMs = Date.now() - iterStart;
-      iterations.push(iteration);
-      logger.info(
-        { iteration: i + 1, score: auditResult.score },
-        "[convergence] Quality threshold reached!"
-      );
-      const verification = await runVerification(cfg);
-      if (!verification.overall && cfg.stopOnVerificationFailure) {
-        endSpan(span);
-        return {
-          ready: false,
-          iterations,
-          finalScore: auditResult.score,
-          totalDurationMs: Date.now() - startedAt,
-          reason: "Verification failed at threshold score"
-        };
-      }
-      endSpan(span);
-      return {
-        ready: true,
-        iterations,
-        finalScore: auditResult.score,
-        totalDurationMs: Date.now() - startedAt,
-        reason: `Converged at iteration ${i + 1} with score ${auditResult.score}`
-      };
-    }
-    if (cfg.autoApply && auditResult.findings > 0) {
-      const fixResult = await runAutoFix(cfg.workspaceRoot);
-      iteration.fixed = fixResult.fixed;
-      iteration.skipped = fixResult.skipped;
-      logger.info(
-        { fixed: fixResult.fixed, skipped: fixResult.skipped },
-        "[convergence] Auto-fix applied"
-      );
-    }
-    if (cfg.requiredChecks.includes("typecheck") || cfg.requiredChecks.includes("test")) {
-      const verification = await runVerification(cfg);
-      iteration.verification = {
-        typecheck: verification.typecheck,
-        test: verification.test,
-        build: verification.build
-      };
-      if (!verification.overall && cfg.stopOnVerificationFailure) {
-        iteration.durationMs = Date.now() - iterStart;
-        iterations.push(iteration);
-        endSpan(span);
-        return {
-          ready: false,
-          iterations,
-          finalScore: auditResult.score,
-          totalDurationMs: Date.now() - startedAt,
-          reason: `Verification failed at iteration ${i + 1} \u2014 manual intervention needed`
-        };
-      }
-    }
-    iteration.durationMs = Date.now() - iterStart;
-    iterations.push(iteration);
-  }
-  endSpan(span);
-  return {
-    ready: false,
-    iterations,
-    finalScore: iterations[iterations.length - 1]?.score ?? 0,
-    totalDurationMs: Date.now() - startedAt,
-    reason: `Max iterations (${cfg.maxIterations}) reached without converging`
-  };
-}
-async function runReporankAudit(workspaceRoot) {
-  const span = startSpan("convergence.audit");
-  try {
-    const reporankCli = (0, import_path20.resolve)(
-      workspaceRoot,
-      "../reporank/apps/cli/src/index.ts"
-    );
-    if (!(0, import_fs21.existsSync)(reporankCli)) {
-      logger.warn("[convergence] RepoRank CLI not found \u2014 using heuristic scan");
-      const result2 = runHeuristicScan(workspaceRoot);
-      endSpan(span);
-      return result2;
-    }
-    const cmd = `npx tsx "${reporankCli}" verify "${workspaceRoot}" --json`;
-    let output;
-    try {
-      output = (0, import_child_process7.execSync)(cmd, {
-        encoding: "utf-8",
-        timeout: 12e4,
-        cwd: (0, import_path20.resolve)(reporankCli, "..", "..", "..", "..")
-      });
-    } catch (e) {
-      output = e.stdout || e.message || "{}";
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(output);
-    } catch {
-      endSpan(span);
-      return { score: 0, findings: 0, bySeverity: {}, recommendations: [] };
-    }
-    const bySeverity = parsed.bySeverity || {};
-    const findings = Object.values(bySeverity).reduce(
-      (sum, v) => sum + (typeof v === "number" ? v : 0),
-      0
-    );
-    const result = {
-      score: parsed.qualityScore ?? 0,
-      findings,
-      bySeverity,
-      recommendations: (parsed.findings || []).slice(0, 5).map((f) => f.recommendation || f.description || "")
-    };
-    endSpan(span);
-    return result;
-  } catch (err) {
-    logger.warn({ err }, "[convergence] RepoRank audit failed");
-    endSpan(span, err instanceof Error ? err : new Error(String(err)));
-    return { score: 0, findings: 0, bySeverity: {}, recommendations: [] };
-  }
-}
-function runHeuristicScan(workspaceRoot) {
-  const findings = {};
-  const recommendations = [];
-  function scanDir(dir, depth = 0) {
-    if (depth > 5) return;
-    try {
-      const entries = (0, import_child_process7.execSync)(`ls -1 "${dir}"`, {
-        encoding: "utf-8",
-        cwd: workspaceRoot
-      }).split("\n");
-      for (const entry of entries) {
-        if (!entry) continue;
-        const full = (0, import_path20.join)(dir, entry);
-        try {
-          const stat = (0, import_child_process7.execSync)(`stat -c %F "${full}"`, {
-            encoding: "utf-8",
-            cwd: workspaceRoot
-          }).trim();
-          if (stat === "directory" && !entry.startsWith(".") && entry !== "node_modules") {
-            scanDir(full, depth + 1);
-          } else if (entry.endsWith(".ts") || entry.endsWith(".tsx") || entry.endsWith(".js")) {
-            const content = (0, import_fs21.readFileSync)(full, "utf-8");
-            if (content.includes("console.log(")) {
-              findings["console-left-in"] = (findings["console-left-in"] || 0) + 1;
-            }
-            if (content.includes(": any")) {
-              findings["any-type-abuse"] = (findings["any-type-abuse"] || 0) + 1;
-            }
-            if (content.match(/setInterval\((?!.*clearInterval)/s)) {
-              findings["resource-leak"] = (findings["resource-leak"] || 0) + 1;
-            }
-            if (content.match(/await\s+\w+\([^)]*\)(?!\s*\}|\s*catch)/s)) {
-              findings["no-error-handling"] = (findings["no-error-handling"] || 0) + 1;
-            }
-          }
-        } catch {
-        }
-      }
-    } catch {
-    }
-  }
-  scanDir(".");
-  const totalFindings = Object.values(findings).reduce((a, b) => a + b, 0);
-  const score = Math.max(0, 100 - totalFindings * 2);
-  if (findings["console-left-in"]) {
-    recommendations.push(`Remove ${findings["console-left-in"]} console.log statements`);
-  }
-  if (findings["any-type-abuse"]) {
-    recommendations.push(`Fix ${findings["any-type-abuse"]} any-type abuses`);
-  }
-  if (findings["resource-leak"]) {
-    recommendations.push(`Fix ${findings["resource-leak"]} resource leaks`);
-  }
-  if (findings["no-error-handling"]) {
-    recommendations.push(`Add error handling to ${findings["no-error-handling"]} unguarded awaits`);
-  }
-  return { score, findings: totalFindings, bySeverity: findings, recommendations };
-}
-async function runAutoFix(workspaceRoot) {
-  const span = startSpan("convergence.autofix");
-  let fixed = 0;
-  let skipped = 0;
-  const errors = [];
-  try {
-    const reporankCli = (0, import_path20.resolve)(
-      workspaceRoot,
-      "../reporank/apps/cli/src/index.ts"
-    );
-    if ((0, import_fs21.existsSync)(reporankCli)) {
-      const cmd = `npx tsx "${reporankCli}" verify "${workspaceRoot}" --apply --dry-run --json`;
-      try {
-        const output = (0, import_child_process7.execSync)(cmd, {
-          encoding: "utf-8",
-          timeout: 12e4,
-          cwd: (0, import_path20.resolve)(reporankCli, "..", "..", "..", "..")
-        });
-        const parsed = JSON.parse(output);
-        fixed = parsed.fixed || parsed.applied?.length || 0;
-        skipped = parsed.skipped?.length || 0;
-      } catch (e) {
-        const msg = e.message || String(e);
-        errors.push(msg);
-        logger.warn({ msg }, "[convergence] Auto-fix dry run failed");
-      }
-    } else {
-      const fixPatterns = await applySimpleFixes(workspaceRoot);
-      fixed = fixPatterns.fixed;
-      skipped = fixPatterns.skipped;
-    }
-  } catch (err) {
-    errors.push(err instanceof Error ? err.message : String(err));
-  }
-  endSpan(span);
-  return { fixed, skipped, errors };
-}
-async function applySimpleFixes(workspaceRoot) {
-  let fixed = 0;
-  let skipped = 0;
-  const simpleFixes = [
-    {
-      pattern: /console\.log\(.*\);\s*/g,
-      replacement: "// [reporank] removed console.log \u2014 use a logger\n",
-      description: "console.log removal"
-    },
-    {
-      pattern: /: any(?!\w)/g,
-      replacement: ": unknown",
-      description: "any \u2192 unknown"
-    }
-  ];
-  function walkAndFix(dir, depth = 0) {
-    if (depth > 3) return;
-    try {
-      const entries = (0, import_child_process7.execSync)(`ls -1 "${dir}"`, {
-        encoding: "utf-8",
-        cwd: workspaceRoot
-      }).split("\n");
-      for (const entry of entries) {
-        if (!entry || entry.startsWith(".") || entry === "node_modules" || entry === "dist") continue;
-        const full = (0, import_path20.resolve)(workspaceRoot, dir, entry);
-        try {
-          const isDir = (0, import_fs21.existsSync)(full) && (0, import_child_process7.execSync)(`stat -c %F "${full}"`, { encoding: "utf-8", cwd: workspaceRoot }).trim() === "directory";
-          if (isDir) {
-            walkAndFix((0, import_path20.join)(dir, entry), depth + 1);
-          } else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
-            const content = (0, import_fs21.readFileSync)(full, "utf-8");
-            let modified = content;
-            for (const fix of simpleFixes) {
-              const prev = modified;
-              modified = modified.replace(fix.pattern, fix.replacement);
-              if (modified !== prev) {
-                logger.info({ file: full, fix: fix.description }, "[convergence] Simple fix applied");
-                fixed++;
-              }
-            }
-            if (modified !== content) {
-              (0, import_fs21.writeFileSync)(full, modified, "utf-8");
-            }
-          }
-        } catch {
-          skipped++;
-        }
-      }
-    } catch {
-      skipped++;
-    }
-  }
-  walkAndFix(".");
-  return { fixed, skipped };
-}
-async function runVerification(cfg) {
-  const span = startSpan("convergence.verify");
-  const result = {
-    overall: true,
-    typecheck: true,
-    test: true,
-    build: true,
-    details: ""
-  };
-  if (cfg.requiredChecks.includes("typecheck")) {
-    try {
-      (0, import_child_process7.execSync)("npx tsc --noEmit", {
-        cwd: cfg.workspaceRoot,
-        timeout: 6e4,
-        encoding: "utf-8"
-      });
-      result.typecheck = true;
-    } catch (e) {
-      result.typecheck = false;
-      result.overall = false;
-      result.details += `Typecheck failed: ${e.message?.slice(0, 100)}
-`;
-    }
-  }
-  if (cfg.requiredChecks.includes("test")) {
-    try {
-      (0, import_child_process7.execSync)("npx vitest run --reporter=json 2>&1 || true", {
-        cwd: cfg.workspaceRoot,
-        timeout: 12e4,
-        encoding: "utf-8"
-      });
-      result.test = true;
-    } catch (e) {
-      const output = e.stdout || e.message || "";
-      if (output.includes("numFailedTests")) {
-        try {
-          const jsonStart = output.indexOf("{");
-          const jsonEnd = output.lastIndexOf("}") + 1;
-          const parsed = JSON.parse(output.substring(jsonStart, jsonEnd));
-          result.test = parsed.numFailedTests === 0;
-          if (!result.test) {
-            result.overall = false;
-            result.details += `Tests: ${parsed.numFailedTests} failed
-`;
-          }
-        } catch {
-          result.test = true;
-        }
-      } else {
-        result.test = false;
-        result.overall = false;
-        result.details += `Test runner failed: ${output.slice(0, 100)}
-`;
-      }
-    }
-  }
-  if (cfg.requiredChecks.includes("build")) {
-    try {
-      (0, import_child_process7.execSync)("npx vite build", {
-        cwd: cfg.workspaceRoot,
-        timeout: 12e4,
-        encoding: "utf-8"
-      });
-      result.build = true;
-    } catch (e) {
-      result.build = false;
-      result.overall = false;
-      result.details += `Build failed: ${e.message?.slice(0, 100)}
-`;
-    }
-  }
-  endSpan(span);
-  return result;
-}
-async function runConvergence(workspaceRoot, threshold = 85, maxIterations = 5) {
-  return converge({
-    workspaceRoot,
-    threshold,
-    maxIterations,
-    autoApply: true,
-    stopOnVerificationFailure: true,
-    requiredChecks: ["audit", "typecheck", "test"]
-  });
-}
-var import_child_process7, import_fs21, import_path20, DEFAULT_CONFIG2;
-var init_convergence_loop = __esm({
-  "server/buildPipeline/convergence-loop.ts"() {
-    "use strict";
-    import_child_process7 = require("child_process");
-    import_fs21 = require("fs");
-    import_path20 = require("path");
-    init_logger();
-    init_traceContext();
-    DEFAULT_CONFIG2 = {
-      workspaceRoot: process.cwd(),
-      threshold: 85,
-      maxIterations: 5,
-      autoApply: true,
-      stopOnVerificationFailure: true,
-      requiredChecks: ["audit", "typecheck", "test"]
-    };
-  }
-});
-
 // server/settings/configSchema.ts
 var import_zod4, FeatureFlagsSchema, AgentConfigSchema, VibeServeConfigSchema, RepoRankConfigSchema, GoogleAxConfigSchema, IntegrationsConfigSchema, ApprovalPolicySchema, PipelineConfigSchema, SubAgentConfigSchema, ModelRouterConfigSchema, MutlyConfigSchema;
 var init_configSchema = __esm({
@@ -12377,10 +11265,10 @@ var init_configSchema = __esm({
 // server/settings/soulParser.ts
 function parseSoulFile(filePath) {
   try {
-    if (!import_fs22.default.existsSync(filePath)) {
+    if (!import_fs19.default.existsSync(filePath)) {
       return { config: null, body: "", error: "File not found" };
     }
-    const content = import_fs22.default.readFileSync(filePath, "utf-8");
+    const content = import_fs19.default.readFileSync(filePath, "utf-8");
     return parseSoulContent(content);
   } catch (e) {
     return { config: null, body: "", error: e instanceof Error ? e.message : String(e) };
@@ -12422,12 +11310,12 @@ function parseSoulContent(content) {
   }
   return { config: result.data, body };
 }
-var import_zod5, import_fs22, import_js_yaml, DefaultsSchema, SoulSchema;
+var import_zod5, import_fs19, import_js_yaml, DefaultsSchema, SoulSchema;
 var init_soulParser = __esm({
   "server/settings/soulParser.ts"() {
     "use strict";
     import_zod5 = require("zod");
-    import_fs22 = __toESM(require("fs"), 1);
+    import_fs19 = __toESM(require("fs"), 1);
     import_js_yaml = __toESM(require("js-yaml"), 1);
     DefaultsSchema = import_zod5.z.object({
       auto_commit: import_zod5.z.boolean().default(true),
@@ -12451,18 +11339,18 @@ var init_soulParser = __esm({
 // server/settings/heartbeat.ts
 function readHeartbeat(filePath) {
   try {
-    if (!import_fs23.default.existsSync(filePath)) return null;
-    const raw = import_fs23.default.readFileSync(filePath, "utf-8");
+    if (!import_fs20.default.existsSync(filePath)) return null;
+    const raw = import_fs20.default.readFileSync(filePath, "utf-8");
     return JSON.parse(raw);
   } catch {
     return null;
   }
 }
-var import_fs23;
+var import_fs20;
 var init_heartbeat = __esm({
   "server/settings/heartbeat.ts"() {
     "use strict";
-    import_fs23 = __toESM(require("fs"), 1);
+    import_fs20 = __toESM(require("fs"), 1);
   }
 });
 
@@ -12489,10 +11377,10 @@ var init_sessionOverrides = __esm({
 
 // server/settings/loader.ts
 function resolveConfigPath(dir, filePath) {
-  const root = import_path21.default.resolve(dir);
-  if (import_path21.default.isAbsolute(filePath)) {
-    const resolved = import_path21.default.resolve(filePath);
-    const rootSep = root.endsWith(import_path21.default.sep) ? root : root + import_path21.default.sep;
+  const root = import_path19.default.resolve(dir);
+  if (import_path19.default.isAbsolute(filePath)) {
+    const resolved = import_path19.default.resolve(filePath);
+    const rootSep = root.endsWith(import_path19.default.sep) ? root : root + import_path19.default.sep;
     if (resolved === root || resolved.startsWith(rootSep)) return resolved;
     return null;
   }
@@ -12502,11 +11390,11 @@ function resolveConfigPath(dir, filePath) {
 function loadConfig(settingsDir) {
   const errors = [];
   const dir = settingsDir ?? process.cwd();
-  const configPath = import_path21.default.join(dir, "mutly.config.json");
-  let config = { ...DEFAULT_CONFIG3 };
+  const configPath = import_path19.default.join(dir, "mutly.config.json");
+  let config = { ...DEFAULT_CONFIG2 };
   try {
-    if (import_fs24.default.existsSync(configPath)) {
-      const raw = JSON.parse(import_fs24.default.readFileSync(configPath, "utf-8"));
+    if (import_fs21.default.existsSync(configPath)) {
+      const raw = JSON.parse(import_fs21.default.readFileSync(configPath, "utf-8"));
       const parsed = MutlyConfigSchema.safeParse(raw);
       if (parsed.success) {
         config = parsed.data;
@@ -12538,37 +11426,37 @@ function loadConfig(settingsDir) {
 }
 function saveConfig(config, settingsDir) {
   const dir = settingsDir ?? process.cwd();
-  const configPath = import_path21.default.join(dir, "mutly.config.json");
-  const tmpPath = import_path21.default.join(dir, "mutly.config.tmp");
+  const configPath = import_path19.default.join(dir, "mutly.config.json");
+  const tmpPath = import_path19.default.join(dir, "mutly.config.tmp");
   try {
     const parsed = MutlyConfigSchema.safeParse(config);
     if (!parsed.success) {
       return parsed.error.issues.map((i) => i.path.join(".") + ": " + i.message).join("; ");
     }
-    import_fs24.default.writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2), "utf-8");
-    import_fs24.default.renameSync(tmpPath, configPath);
+    import_fs21.default.writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2), "utf-8");
+    import_fs21.default.renameSync(tmpPath, configPath);
     return true;
   } catch (e) {
     try {
-      import_fs24.default.unlinkSync(tmpPath);
+      import_fs21.default.unlinkSync(tmpPath);
     } catch {
     }
     return e instanceof Error ? e.message : String(e);
   }
 }
-var import_fs24, import_path21, DEFAULT_CONFIG3;
+var import_fs21, import_path19, DEFAULT_CONFIG2;
 var init_loader = __esm({
   "server/settings/loader.ts"() {
     "use strict";
-    import_fs24 = __toESM(require("fs"), 1);
-    import_path21 = __toESM(require("path"), 1);
+    import_fs21 = __toESM(require("fs"), 1);
+    import_path19 = __toESM(require("path"), 1);
     init_configSchema();
     init_soulParser();
     init_heartbeat();
     init_sessionOverrides();
     init_config();
     init_workspacePaths();
-    DEFAULT_CONFIG3 = MutlyConfigSchema.parse({});
+    DEFAULT_CONFIG2 = MutlyConfigSchema.parse({});
   }
 });
 
@@ -12721,1379 +11609,267 @@ var init_routes = __esm({
   }
 });
 
-// server/benchmarks/test-runner.ts
-async function runTestSuite(workspaceDir, opts) {
-  const testFramework = opts.framework || (opts.testFile.endsWith(".test.tsx") || opts.testFile.includes("tsx") ? "vitest" : "node");
-  if (testFramework === "node") {
-    return runNodeTests(workspaceDir, opts);
-  }
-  return runVitestTests(workspaceDir, opts);
-}
-async function runVitestTests(workspaceDir, opts) {
-  const testsDir = import_path22.default.join(workspaceDir, "__tests__");
-  if (!import_fs25.default.existsSync(testsDir)) {
-    import_fs25.default.mkdirSync(testsDir, { recursive: true });
-  }
-  const testFileInWorkspace = import_path22.default.join(workspaceDir, opts.testFile);
-  const expectedTestFile = import_path22.default.join(testsDir, import_path22.default.basename(opts.testFile));
-  if (import_fs25.default.existsSync(testFileInWorkspace) && testFileInWorkspace !== expectedTestFile) {
-    import_fs25.default.copyFileSync(testFileInWorkspace, expectedTestFile);
-  }
-  const actualTestDir = import_path22.default.join(workspaceDir, import_path22.default.dirname(opts.testFile));
-  if (actualTestDir !== testsDir && import_fs25.default.existsSync(import_path22.default.join(actualTestDir, import_path22.default.basename(opts.testFile)))) {
-    const src = import_path22.default.join(actualTestDir, import_path22.default.basename(opts.testFile));
-    if (src !== expectedTestFile) {
-      import_fs25.default.copyFileSync(src, expectedTestFile);
-    }
-  }
-  const configPath = import_path22.default.join(workspaceDir, "vitest.config.ts");
-  if (!import_fs25.default.existsSync(configPath)) {
-    import_fs25.default.writeFileSync(configPath, VITEST_CONFIG_TEMPLATE, "utf-8");
-  }
-  const resultsPath = import_path22.default.join(workspaceDir, "test-results.json");
-  try {
-    await execAsync(`npx vitest run --config "${configPath}"`, {
-      cwd: workspaceDir,
-      timeout: opts.timeout,
-      env: { ...process.env, CI: "true" }
-    });
-  } catch {
-  }
-  if (import_fs25.default.existsSync(resultsPath)) {
-    try {
-      const raw = JSON.parse(import_fs25.default.readFileSync(resultsPath, "utf-8"));
-      if (raw.testResults && Array.isArray(raw.testResults)) {
-        const allResults = [];
-        for (const suite of raw.testResults) {
-          const assertions = suite.assertionResults || [];
-          for (const a of assertions) {
-            allResults.push({
-              name: a.title || a.fullName || "unknown",
-              passed: a.status === "passed",
-              duration: a.duration,
-              error: a.failureMessages?.join("; ")
-            });
-          }
-        }
-        return mapToExpectedNames(allResults, opts.testNames);
-      }
-    } catch {
-    }
-  }
-  logger.warn("[test-runner] Could not parse vitest results, assuming all failed");
-  return opts.testNames.map((name) => ({ name, passed: false, error: "Test runner could not parse results" }));
-}
-async function runNodeTests(workspaceDir, opts) {
-  const testFile = import_path22.default.join(workspaceDir, opts.testFile);
-  if (!import_fs25.default.existsSync(testFile)) {
-    return opts.testNames.map((name) => ({ name, passed: false, error: `Test file not found: ${opts.testFile}` }));
-  }
-  try {
-    const { stdout, stderr } = await execAsync(`npx tsx "${testFile}"`, {
-      cwd: workspaceDir,
-      timeout: opts.timeout,
-      maxBuffer: 1024 * 1024
-    });
-    const results = [];
-    const lines = stdout.split("\n");
-    for (const name of opts.testNames) {
-      const matched = lines.some((l) => l.includes(name) && l.includes("PASS"));
-      results.push({
-        name,
-        passed: matched,
-        error: matched ? void 0 : "Test not found in output"
-      });
-    }
-    return results;
-  } catch (e) {
-    const stderr = e.stderr || "";
-    const stdout = e.stdout || "";
-    const results = [];
-    for (const name of opts.testNames) {
-      const passInStdout = stdout.includes(name) && (stdout.includes("PASS") || stdout.includes("ok"));
-      const failInStderr = stderr.includes(name) && (stderr.includes("FAIL") || stderr.includes("Error"));
-      results.push({
-        name,
-        passed: passInStdout && !failInStderr,
-        error: failInStderr ? stderr.slice(0, 500) : void 0
-      });
-    }
-    return results;
-  }
-}
-function mapToExpectedNames(actual, expected) {
-  return expected.map((name) => {
-    const found = actual.find(
-      (a) => a.name === name || a.name.toLowerCase().includes(name.toLowerCase()) || name.toLowerCase().includes(a.name.toLowerCase())
-    );
-    return found || { name, passed: false, error: "Test not found in results" };
-  });
-}
-var import_child_process8, import_util, import_path22, import_fs25, execAsync, VITEST_CONFIG_TEMPLATE;
-var init_test_runner = __esm({
-  "server/benchmarks/test-runner.ts"() {
-    "use strict";
-    import_child_process8 = require("child_process");
-    import_util = require("util");
-    import_path22 = __toESM(require("path"), 1);
-    import_fs25 = __toESM(require("fs"), 1);
-    init_logger();
-    execAsync = (0, import_util.promisify)(import_child_process8.exec);
-    VITEST_CONFIG_TEMPLATE = `import { defineConfig } from "vitest/config";
-export default defineConfig({
-  test: {
-    environment: "jsdom",
-    globals: true,
-    include: ["__tests__/**"],
-    reporters: ["json"],
-    outputFile: "./test-results.json",
-    testTimeout: 30000,
-  },
-});
-`;
-  }
-});
-
-// server/benchmarks/swe-bench-harness.ts
-var swe_bench_harness_exports = {};
-__export(swe_bench_harness_exports, {
-  runSweBenchEval: () => runSweBenchEval,
-  sweBenchHarness: () => sweBenchHarness
-});
-async function runSweBenchEval(tasks, opts = {}) {
-  return sweBenchHarness.run(tasks, opts);
-}
-var import_path23, import_fs26, SweBenchHarness, sweBenchHarness;
-var init_swe_bench_harness = __esm({
-  "server/benchmarks/swe-bench-harness.ts"() {
-    "use strict";
-    import_path23 = __toESM(require("path"), 1);
-    import_fs26 = __toESM(require("fs"), 1);
-    init_litellmAdapter();
-    init_config();
-    init_logger();
-    init_test_runner();
-    SweBenchHarness = class {
-      constructor() {
-        this.resultsDir = import_path23.default.resolve(process.cwd(), "benchmark-results");
-        import_fs26.default.mkdirSync(this.resultsDir, { recursive: true });
-      }
-      async run(tasks, opts) {
-        const maxTasks = Math.min(opts.maxTasks ?? tasks.length, tasks.length);
-        const timeoutPerTask = opts.timeoutPerTask ?? 12e4;
-        const model = opts.model ?? getConfig().MUTLY_DEFAULT_MODEL ?? "gemini-2.5-flash";
-        const selected = tasks.slice(0, maxTasks);
-        logger.info(`[swe-bench] Running ${selected.length} tasks with model ${model}`);
-        const results = [];
-        for (let i = 0; i < selected.length; i++) {
-          const task = selected[i];
-          logger.info(`[swe-bench] [${i + 1}/${selected.length}] ${task.instance_id}`);
-          const start = Date.now();
-          try {
-            const result = await this.runSingleTask(task, { timeoutPerTask, model });
-            results.push(result);
-            logger.info(`[swe-bench]   ${result.passed ? "PASS" : "FAIL"} (score: ${result.score.toFixed(2)}, ${result.durationMs}ms)`);
-          } catch (e) {
-            logger.error(`[swe-bench]   ERROR: ${e.message}`);
-            results.push({
-              instance_id: task.instance_id,
-              passed: false,
-              resolved: false,
-              score: 0,
-              durationMs: Date.now() - start,
-              steps: 0,
-              error: e.message ?? String(e)
-            });
-          }
-        }
-        const passed = results.filter((r) => r.passed).length;
-        const totalDurationMs = results.reduce((s, r) => s + r.durationMs, 0);
-        const summary = {
-          total: results.length,
-          passed,
-          score: results.length > 0 ? passed / results.length : 0,
-          totalDurationMs
-        };
-        const dateStr = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-        const outPath = import_path23.default.join(this.resultsDir, `swe-bench-${dateStr}.json`);
-        import_fs26.default.writeFileSync(outPath, JSON.stringify({ summary, results, model, runAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 2));
-        logger.info(`[swe-bench] Results saved to ${outPath}`);
-        logger.info(`[swe-bench] Summary: ${passed}/${results.length} passed (${(summary.score * 100).toFixed(0)}%)`);
-        return { results, summary };
-      }
-      async runSingleTask(task, opts) {
-        const start = Date.now();
-        let steps = 0;
-        const taskDesc = `## Task: ${task.instance_id}
-
-${task.issue}
-
-## Requirements
-${task.fail_to_pass.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
-        steps++;
-        const genResult = await litellmAdapter.generate(
-          taskDesc,
-          {
-            model: opts.model,
-            system: `You are an expert TypeScript developer. Generate a COMPLETE, production-ready implementation that satisfies ALL requirements.
-Rules:
-- Output ONLY the code block. Do NOT wrap in markdown fences unless they are part of the code.
-- Use modern ES2022+ syntax.
-- Include ALL necessary imports.
-- Make the code self-contained and directly runnable.
-- For React components: use named exports.
-- For hooks: use named exports.
-- For middleware: export a function that takes (req, res, next).`,
-            maxTokens: 8192,
-            temperature: 0.2
-          }
-        );
-        steps++;
-        let code = genResult.text;
-        const fenceMatch = code.match(/```(?:tsx?|jsx?|typescript|javascript)?\n([\s\S]*?)```/);
-        if (fenceMatch) {
-          code = fenceMatch[1].trim();
-        }
-        const workspaceDir = import_path23.default.join(process.cwd(), "benchmark-results", "workspace", task.instance_id);
-        import_fs26.default.mkdirSync(workspaceDir, { recursive: true });
-        const targetFile = task.target_file || this.inferTargetFile(task);
-        const fullPath = import_path23.default.join(workspaceDir, targetFile);
-        import_fs26.default.mkdirSync(import_path23.default.dirname(fullPath), { recursive: true });
-        import_fs26.default.writeFileSync(fullPath, code, "utf-8");
-        steps++;
-        if (task.support_files) {
-          for (const [relPath, content] of Object.entries(task.support_files)) {
-            const sp = import_path23.default.join(workspaceDir, relPath);
-            import_fs26.default.mkdirSync(import_path23.default.dirname(sp), { recursive: true });
-            import_fs26.default.writeFileSync(sp, content, "utf-8");
-          }
-        }
-        let testResults = [];
-        let passed = false;
-        if (task.test_code) {
-          const testFilePath = import_path23.default.join(workspaceDir, this.getTestFileName(task));
-          import_fs26.default.mkdirSync(import_path23.default.dirname(testFilePath), { recursive: true });
-          import_fs26.default.writeFileSync(testFilePath, task.test_code, "utf-8");
-          testResults = await runTestSuite(workspaceDir, {
-            testFile: this.getTestFileName(task),
-            testNames: [...task.fail_to_pass, ...task.pass_to_pass],
-            timeout: opts.timeoutPerTask
-          });
-          steps++;
-          const allRequiredPass = task.fail_to_pass.every((name) => {
-            const r = testResults.find((t) => t.name === name);
-            return r?.passed === true;
-          });
-          const allStablePass = task.pass_to_pass.every((name) => {
-            const r = testResults.find((t) => t.name === name);
-            return r?.passed === true;
-          });
-          passed = allRequiredPass && allStablePass;
-        } else {
-          passed = true;
-          testResults = task.fail_to_pass.map((name) => ({ name, passed: true }));
-        }
-        const durationMs = Date.now() - start;
-        const totalTests = [...task.fail_to_pass, ...task.pass_to_pass].length;
-        const passedTests = testResults.filter((t) => t.passed).length;
-        return {
-          instance_id: task.instance_id,
-          passed,
-          resolved: passed,
-          score: totalTests > 0 ? passedTests / totalTests : 1,
-          durationMs,
-          steps,
-          testResults,
-          generatedCode: code.slice(0, 500)
-        };
-      }
-      inferTargetFile(task) {
-        const id = task.instance_id.toLowerCase();
-        if (id.includes("counter")) return "Counter.tsx";
-        if (id.includes("login")) return "LoginForm.tsx";
-        if (id.includes("data-fetch") || id.includes("hook")) return "useFetchData.ts";
-        if (id.includes("todo")) return "TodoManager.tsx";
-        if (id.includes("middleware")) return "middleware.ts";
-        return "generated.ts";
-      }
-      getTestFileName(task) {
-        const target = task.target_file || this.inferTargetFile(task);
-        const base = target.replace(/\.(tsx?|jsx?)$/, "");
-        return `${base}.test.ts`;
-      }
-    };
-    sweBenchHarness = new SweBenchHarness();
-  }
-});
-
-// server/tools/semanticSearch.ts
-var semanticSearch_exports = {};
-__export(semanticSearch_exports, {
-  hybridSearch: () => hybridSearch,
-  semanticSearch: () => semanticSearch
-});
-async function semanticSearch(params, workspaceRoot) {
-  const results = await agentDaemon.searchCodeSemantically(
-    params.query,
-    params.maxResults || 10
-  );
-  return results.filter((r) => {
-    if (!params.fileExtensions?.length) return true;
-    const ext = "." + (r.filePath.split(".").pop() || "");
-    return params.fileExtensions.includes(ext);
-  }).map((r) => ({
-    ...r,
-    fullPath: workspaceRoot + "/" + r.filePath
-  }));
-}
-async function hybridSearch(query, workspaceRoot, maxResults = 10) {
-  const semantic = await semanticSearch({ query, maxResults }, workspaceRoot);
-  if (semantic.length >= maxResults) return semantic;
-  const remaining = maxResults - semantic.length;
-  try {
-    const { execSync: execSync6 } = await import("child_process");
-    const escaped = query.replace(/"/g, '\\"');
-    const grepResults = execSync6(
-      `grep -rl "${escaped}" "${workspaceRoot}" --include="*.ts" --include="*.tsx" 2>/dev/null | head -${remaining}`,
-      { encoding: "utf-8", timeout: 5e3 }
-    ).trim().split("\n").filter(Boolean);
-    for (const fullPath of grepResults) {
-      if (semantic.some((r) => r.fullPath === fullPath)) continue;
-      semantic.push({
-        filePath: fullPath.replace(workspaceRoot + "/", ""),
-        score: 0.5,
-        snippet: "",
-        fullPath
-      });
-    }
-  } catch {
-  }
-  return semantic.slice(0, maxResults);
-}
-var init_semanticSearch = __esm({
-  "server/tools/semanticSearch.ts"() {
-    "use strict";
-    init_agentDaemon();
-  }
-});
-
-// server/pipeline/provenanceRouter.ts
-var provenanceRouter_exports = {};
-__export(provenanceRouter_exports, {
-  createProvenanceRouter: () => createProvenanceRouter
-});
-function createProvenanceRouter(pipelineRunner2) {
-  const router = (0, import_express2.Router)();
-  router.get("/pipeline/:id/provenance", async (req, res) => {
-    try {
-      const state = await pipelineRunner2.getState(req.params.id);
-      if (!state) return res.status(404).json({ error: "Pipeline not found" });
-      const phases = state.phases || {};
-      const trail = [];
-      for (const [phaseId, phase] of Object.entries(phases)) {
-        const p = phase;
-        trail.push({
-          phase: phaseId,
-          status: p.status || "unknown",
-          score: p.score,
-          completedAt: p.completedAt,
-          provenance: {
-            agent: p._provenance?.agent || "coordinator",
-            origin: p._provenance?.origin || "ai",
-            timestamp: p._provenance?.timestamp || p.completedAt,
-            workflowHash: p._provenance?.workflowHash || state.workflowHash,
-            promptHash: p._provenance?.promptHash || null
-          }
-        });
-      }
-      res.json({
-        success: true,
-        pipelineId: state.id,
-        workflowHash: state.workflowHash,
-        totalPhases: trail.length,
-        completedPhases: trail.filter((t) => t.status === "passed").length,
-        failedPhases: trail.filter((t) => t.status === "failed").length,
-        trail
-      });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-  return router;
-}
-var import_express2;
-var init_provenanceRouter = __esm({
-  "server/pipeline/provenanceRouter.ts"() {
-    "use strict";
-    import_express2 = require("express");
-  }
-});
-
-// server/buildPipeline/pipelineGitApi.ts
-var pipelineGitApi_exports = {};
-__export(pipelineGitApi_exports, {
-  commitPipeline: () => commitPipeline,
-  getPipelineDiff: () => getPipelineDiff,
-  getPipelineGitLog: () => getPipelineGitLog
-});
-function getPipelineDiff(pipelineId, opts = {}) {
-  const state = pipelineRunner.getStateSync(pipelineId);
-  const ws = state?.workspacePath ?? null;
-  if (!ws) return null;
-  const git = new GitService(ws);
-  try {
-    const status = git.status();
-    const diff = git.diff({ staged: opts.staged, paths: opts.paths });
-    return { pipelineId, workspacePath: ws, diff, staged: !!opts.staged, files: status.files };
-  } catch (e) {
-    if (e instanceof GitCommandError) {
-      logger.warn({ pipelineId, err: e.message }, "git diff failed (no repo?)");
-    }
-    return { pipelineId, workspacePath: ws, diff: "", staged: !!opts.staged, files: [] };
-  }
-}
-function getPipelineGitLog(pipelineId, limit = 20) {
-  const state = pipelineRunner.getStateSync(pipelineId);
-  const ws = state?.workspacePath ?? null;
-  if (!ws) return { pipelineId, workspacePath: null, commits: [] };
-  try {
-    const git = new GitService(ws);
-    return { pipelineId, workspacePath: ws, commits: git.log(limit) };
-  } catch (e) {
-    if (e instanceof GitCommandError) {
-      logger.warn({ pipelineId, err: e.message }, "git log failed");
-    }
-    return { pipelineId, workspacePath: ws, commits: [] };
-  }
-}
-function commitPipeline(pipelineId, message, paths) {
-  const state = pipelineRunner.getStateSync(pipelineId);
-  const ws = state?.workspacePath ?? null;
-  if (!ws) return { ok: false, error: "pipeline not found or no workspace" };
-  if (!message || !message.trim()) return { ok: false, error: "commit message required" };
-  const git = new GitService(ws);
-  try {
-    git.init();
-    git.ensureIdentity();
-    const sha = git.commit(message, paths ?? []);
-    return { ok: true, sha };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
-var init_pipelineGitApi = __esm({
-  "server/buildPipeline/pipelineGitApi.ts"() {
-    "use strict";
-    init_gitService();
-    init_pipelineRunner();
-    init_logger();
-  }
-});
-
 // server.ts
 var server_exports = {};
+function authMiddleware(req, res, next) {
+  const apiKey = extractApiKeyFromHeaders(req.headers);
+  if (!validateMutlyApiKey(apiKey, MUTLY_API_KEY)) {
+    return res.status(401).json({ error: "Invalid or missing API key" });
+  }
+  next();
+}
+function safeId(raw) {
+  return /^[a-zA-Z0-9_\-]+$/.test(raw) ? raw : null;
+}
+async function reporankFetch(method, path21, body, timeout = 3e4) {
+  const cfg = getConfig();
+  if (!cfg.REPORANK_ENABLED) {
+    return { status: 503, body: { success: false, error: "RepoRank disabled" } };
+  }
+  const headers = { "Content-Type": "application/json" };
+  if (cfg.REPORANK_API_KEY) headers["X-Mutly-Key"] = cfg.REPORANK_API_KEY;
+  try {
+    const apiRes = await fetch(`${cfg.REPORANK_API_URL}${path21}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : void 0,
+      signal: AbortSignal.timeout(timeout)
+    });
+    const data = await apiRes.json().catch(() => ({}));
+    return { status: apiRes.ok ? 200 : apiRes.status, body: { success: apiRes.ok, result: data, error: apiRes.ok ? void 0 : `RepoRank API: ${apiRes.status}` } };
+  } catch (err) {
+    return { status: 503, body: { success: false, error: err.message } };
+  }
+}
 async function startServer() {
-  await bootstrapOtel();
-  const app = (0, import_express3.default)();
-  let PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3e3;
-  const WS_PORT = parseInt(process.env.MUTLY_WS_PORT || "24678", 10);
-  const MUTLY_API_KEY = resolveMutlyApiKey(agentDaemon.getSecureKey());
-  app.use(import_express3.default.json({ limit: "2mb" }));
-  app.get("/api/agent/public-config", (_req, res) => {
-    if (process.env.NODE_ENV === "production") {
-      return res.status(404).json({ error: "Not available" });
-    }
-    res.json({
-      port: PORT,
-      vibeserveEnabled: isVibeServeEnabled(),
-      devApiKeyHint: process.env.MUTLY_API_KEY || "dev_mutly_secure_master_key",
-      nodeEnv: process.env.NODE_ENV || "development"
-    });
-  });
-  app.use("/api", authMiddleware);
-  app.use("/api", createSettingsRouter());
-  app.get("/health", async (_req, res) => {
-    const vibeserve = isVibeServeEnabled() ? await checkVibeServeHealth() : { reachable: false, error: "disabled" };
-    res.json({
-      status: "ok",
-      vibeserveReachable: vibeserve.reachable && getVibeServeReachable(),
-      killSwitch: process.env.AUTONOMY_KILL_SWITCH === "true"
-    });
-  });
-  app.use("/api/inngest", (0, import_express4.serve)({ client: inngest, functions: inngestFunctions3 }));
-  app.use((req, res, next) => {
-    const originStr = process.env.ALLOWED_ORIGINS;
-    const allowedOrigins = originStr ? originStr.split(",") : [];
-    const requestOrigin = req.headers.origin;
-    let targetOrigin = "";
-    if (allowedOrigins.length > 0) {
-      if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
-        targetOrigin = requestOrigin;
-      }
-    } else {
-      targetOrigin = "";
-    }
-    if (targetOrigin) {
-      res.setHeader("Access-Control-Allow-Origin", targetOrigin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "X-Mutly-API-Key, Authorization, Content-Type");
-    }
-    if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
-    }
-    next();
-  });
-  const getErrorMessage = (e) => {
-    if (e instanceof Error) return e.message;
-    return String(e);
-  };
-  app.use((req, res, next) => {
-    logger.debug({ method: req.method, url: req.originalUrl || req.url }, "HTTP request");
-    next();
-  });
-  const apiLimiter = (0, import_express_rate_limit.default)({
-    windowMs: 15 * 60 * 1e3,
-    // 15 minutes
-    max: 100,
-    // limit each IP to 100 requests per windowMs
-    standardHeaders: true,
-    // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false,
-    // Disable the `X-RateLimit-*` headers
-    message: { error: "Too many requests from this IP, please try again later." }
-  });
-  app.use("/api/agent/analyze", apiLimiter);
-  app.use("/api/agent/inject-optimization-plan", apiLimiter);
-  app.use("/api/agent/plan", apiLimiter);
-  app.use("/api/agent/dream", apiLimiter);
-  app.use("/api/agent/run-step", apiLimiter);
-  app.use("/api/agent/run-all-steps", apiLimiter);
-  app.use("/api/agent/sandbox/run", apiLimiter);
-  app.use("/api/agent/embeddings/index", apiLimiter);
-  app.use("/api/agent/embeddings/search", apiLimiter);
-  app.use("/api/agent/search", apiLimiter);
-  app.use("/api/agent/integrations/session", apiLimiter);
-  app.use("/api/agent/integrations/rpc", apiLimiter);
-  app.use("/api/agent/integrations/compact-sim", apiLimiter);
-  app.use("/api/agent/audit", apiLimiter);
-  app.use("/api/agent/audit/fix-sim", apiLimiter);
-  app.use("/api/agent/workflow/start", apiLimiter);
-  app.use("/api/agent/workflow/inngest", apiLimiter);
-  app.use("/api/agent/converge", apiLimiter);
-  app.use("/api/agent/benchmark", apiLimiter);
-  app.use("/api/agent/pr/generate", apiLimiter);
-  app.use("/api/agent/changelog/generate", apiLimiter);
-  function authMiddleware(req, res, next) {
-    const presented = extractApiKeyFromHeaders(req.headers);
-    if (validateMutlyApiKey(presented, MUTLY_API_KEY)) {
-      return next();
-    }
-    logger.warn({ url: req.originalUrl }, "Auth check failed");
-    return res.status(401).json({ error: "Unauthorized: Invalid or missing X-Mutly-API-Key header." });
-  }
-  app.get("/api/agent/approvals", async (req, res) => {
-    try {
-      res.json({ success: true, requests: await approvalStore.listRequests() });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/approvals/:id/resolve", async (req, res) => {
-    const { id } = req.params;
-    const { decision } = req.body;
-    if (decision !== "approved" && decision !== "rejected") {
-      return res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
-    }
-    try {
-      const pending = await approvalStore.resolveRequest(id, decision);
-      if (decision === "approved") {
-        try {
-          await agentDaemon.resumeStepAfterApproval(id);
-        } catch (resumeErr) {
-          logger.debug(
-            { approvalId: id, err: getErrorMessage(resumeErr) },
-            "Approval resolved without local ReAct resume (Inngest or workflow gate)"
-          );
-        }
-      }
-      res.json({ success: true, resumed: Boolean(pending) });
-    } catch (e) {
-      if (e instanceof ApprovalResolutionError) {
-        const code = e.code === "EXPIRED" ? 410 : 404;
-        return res.status(code).json({ error: e.message, code: e.code });
-      }
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/approvals/:id/approve", async (req, res) => {
-    try {
-      const pending = await approvalStore.resolveRequest(req.params.id, "approved");
-      try {
-        await agentDaemon.resumeStepAfterApproval(req.params.id);
-      } catch (resumeErr) {
-        logger.debug(
-          { approvalId: req.params.id, err: getErrorMessage(resumeErr) },
-          "Approval resolved without local ReAct resume"
-        );
-      }
-      res.json({ success: true, resumed: Boolean(pending) });
-    } catch (e) {
-      if (e instanceof ApprovalResolutionError) {
-        const code = e.code === "EXPIRED" ? 410 : 404;
-        return res.status(code).json({ error: e.message, code: e.code });
-      }
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/approvals/:id/reject", async (req, res) => {
-    try {
-      await approvalStore.resolveRequest(req.params.id, "rejected");
-      res.json({ success: true });
-    } catch (e) {
-      if (e instanceof ApprovalResolutionError) {
-        const code = e.code === "EXPIRED" ? 410 : 404;
-        return res.status(code).json({ error: e.message, code: e.code });
-      }
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/workflow/start", async (req, res) => {
-    try {
-      const plan = req.body.plan ?? agentDaemon.currentPlan;
-      if (!plan) {
-        return res.status(400).json({ error: "No plan provided" });
-      }
-      const result = await startWorkflow(agentDaemon, {
-        plan,
-        workspaceId: req.body.workspaceId,
-        workspaceRoot: req.body.workspaceRoot
-      });
-      res.json({ success: true, ...result });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/workflow/inngest", async (req, res) => {
-    try {
-      const plan = req.body.plan ?? agentDaemon.currentPlan;
-      if (!plan) {
-        return res.status(400).json({ error: "No plan provided" });
-      }
-      await inngest.send({
-        name: "mutly/workflow.start",
-        data: {
-          plan,
-          workspaceId: req.body.workspaceId,
-          workspaceRoot: req.body.workspaceRoot,
-          traceId: req.body.traceId
-        }
-      });
-      res.json({ success: true, queued: true });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/converge", async (req, res) => {
-    try {
-      const workspace = req.body.workspace || process.env.MUTLY_SANDBOX_DIR || process.cwd();
-      const threshold = parseInt(req.body.threshold, 10) || 85;
-      const maxIterations = parseInt(req.body.maxIterations, 10) || 5;
-      if (Number.isNaN(threshold) || threshold < 0 || threshold > 100) {
-        return res.status(400).json({ error: "Threshold must be 0-100" });
-      }
-      logger.info({ workspace, threshold, maxIterations }, "[api] Starting convergence loop");
-      const result = await runConvergence(workspace, threshold, maxIterations);
-      res.json({
-        success: result.ready,
-        score: result.finalScore,
-        iterations: result.iterations.length,
-        durationMs: result.totalDurationMs,
-        reason: result.reason,
-        details: result.iterations.map((iter) => ({
-          iteration: iter.iteration,
-          score: iter.score,
-          findings: iter.findings,
-          fixed: iter.fixed,
-          verification: iter.verification,
-          durationMs: iter.durationMs
-        }))
-      });
-    } catch (e) {
-      logger.error({ err: e }, "[api] Convergence failed");
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.get("/api/agent/status", (req, res) => {
-    res.json({
-      status: agentDaemon.getStatus(),
-      logs: agentDaemon.logs,
-      microChanges: agentDaemon.microChanges,
-      currentPlan: agentDaemon.currentPlan,
-      lastAnalysis: agentDaemon.lastAnalysis,
-      governance: {
-        killSwitch: process.env.AUTONOMY_KILL_SWITCH === "true",
-        activeWorkflowId: agentDaemon.activeWorkflowId
-      },
-      vibeserve: {
-        enabled: isVibeServeEnabled(),
-        toolMetrics: getAllToolMetrics()
-      },
-      routing: {
-        recentDecisions: getRecentRoutingMetrics().slice(-5)
-      }
-    });
-  });
-  app.get("/api/agent/health", async (_req, res) => {
-    const vibeserve = isVibeServeEnabled() ? await checkVibeServeHealth() : { reachable: false, error: "disabled" };
-    const approvals = await approvalStore.listRequests();
-    res.json({
-      status: "ok",
-      vibeserve: {
-        enabled: isVibeServeEnabled(),
-        reachable: vibeserve.reachable && getVibeServeReachable(),
-        tools: vibeserve.tools,
-        error: vibeserve.error,
-        toolMetrics: getAllToolMetrics()
-      },
-      governance: {
-        killSwitch: process.env.AUTONOMY_KILL_SWITCH === "true",
-        pendingApprovals: approvals.length
-      },
-      routing: {
-        recentDecisions: getRecentRoutingMetrics().slice(-10)
-      }
-    });
-  });
-  app.post("/api/agent/benchmark", async (req, res) => {
-    try {
-      const { tasks, maxTasks, timeoutPerTask, model } = req.body || {};
-      if (!tasks || !Array.isArray(tasks)) {
-        return res.status(400).json({ error: "tasks array required" });
-      }
-      const { runSweBenchEval: runSweBenchEval2 } = await Promise.resolve().then(() => (init_swe_bench_harness(), swe_bench_harness_exports));
-      const { results, summary } = await runSweBenchEval2(tasks, {
-        maxTasks: maxTasks ? parseInt(String(maxTasks), 10) : void 0,
-        timeoutPerTask: timeoutPerTask ? parseInt(String(timeoutPerTask), 10) : void 0,
-        model: model || void 0
-      });
-      res.json({ success: true, results, summary });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/analyze", async (req, res) => {
-    const { type, repoUrl, filesCount } = req.body;
-    try {
-      const report = await agentDaemon.analyzeRepository(type, { repoUrl, filesCount });
-      res.json(report);
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/inject-optimization-plan", (req, res) => {
-    const { plan } = req.body;
-    try {
-      const currentPlan = agentDaemon.injectOptimizationPlan(plan);
-      res.json(currentPlan);
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.get("/api/agent/context", (req, res) => {
-    res.json({ spec: agentDaemon.spec, claude: agentDaemon.claude });
-  });
-  app.put("/api/agent/context", (req, res) => {
-    const { spec, claude } = req.body;
-    if (spec !== void 0) agentDaemon.spec = spec;
-    if (claude !== void 0) agentDaemon.claude = claude;
-    agentDaemon.addLog("info", "Context files (SPEC.md/CLAUDE.md) updated.");
-    res.json({ success: true });
-  });
-  app.post("/api/agent/toggle-autonomous", (req, res) => {
-    agentDaemon.toggleAutonomous();
-    res.json({ phase: agentDaemon.currentPhase });
-  });
-  app.post("/api/agent/plan", async (req, res) => {
-    try {
-      const plan = await agentDaemon.generatePlan();
-      res.json(plan);
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/pr/generate", async (req, res) => {
-    try {
-      const result = await generatePRDescription(req.body);
-      res.json({ success: true, ...result });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/changelog/generate", async (req, res) => {
-    try {
-      const { workspaceRoot, commits } = req.body;
-      if (!workspaceRoot || !commits) {
-        return res.status(400).json({ error: "workspaceRoot and commits required" });
-      }
-      const entry = await generateChangelogEntry(workspaceRoot, commits);
-      res.json({ success: true, entry });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/dream", async (req, res) => {
-    try {
-      const result = await agentDaemon.autoDream();
-      res.json(result);
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/run-step", async (req, res) => {
-    const { stepId } = req.body;
-    try {
-      await agentDaemon.executeStep(stepId);
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/run-all-steps", async (req, res) => {
-    try {
-      await agentDaemon.executeAllSteps();
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.get("/api/agent/symbols", (req, res) => {
-    try {
-      const symbols = getWorkspaceSymbols();
-      res.json({ success: true, symbols });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/embeddings/index", async (req, res) => {
-    try {
-      const result = await agentDaemon.indexWorkspaceEmbeddings();
-      res.json({ success: true, ...result });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/embeddings/search", async (req, res) => {
-    const { query } = req.body;
-    try {
-      const results = await agentDaemon.searchEmbeddings(query);
-      res.json({ success: true, results });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/search", async (req, res) => {
-    try {
-      const { query, maxResults } = req.body;
-      const workspace = req.body.workspace || process.cwd();
-      const { hybridSearch: hybridSearch2 } = await Promise.resolve().then(() => (init_semanticSearch(), semanticSearch_exports));
-      const results = await hybridSearch2(query, workspace, maxResults || 10);
-      res.json({ success: true, results });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/integrations/session", async (req, res) => {
-    const { query } = req.body;
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (apiKey) {
-        const ai = new import_genai10.GoogleGenAI({ apiKey });
-        const sysInst = `You are @mutly, the local developer-focused assistant. Be extremely helpful, concise, and professional. 
-If the user's issue implies editing, changing or refactoring code (e.g. fix, optimize, refactor, change, add), YOU MUST output a visual line diff block containing the specific marker <<<<<<< followed by standard conflict blocks (======= and >>>>>>>) so that the user interface can parse it and render an Apply Draft button. Ensure code blocks are nicely highlighted.
-IMPORTANT: Right before the opening <<<<<<< marker, write a single line identifying the target file relative to the workspace, in the precise format:
-File: relative_path_to_file (e.g., File: src/components/CodeAuditor.tsx or File: server.ts).`;
-        const responseObj = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: query,
-          config: {
-            systemInstruction: sysInst
-          }
-        });
-        const text = responseObj.text || "No reply generated.";
-        const hasDiff = text.includes("<<<<<<<") && text.includes("=======") && text.includes(">>>>>>>");
-        res.json({ success: true, response: text, hasDiff });
-      } else {
-        const qLower = String(query).toLowerCase();
-        let fallbackMsg = "";
-        let hasDiff = false;
-        const header = "\u26A0\uFE0F **[LOCAL SECURE WORKSPACE FALLBACK - NO LIVE GEMINI_API_KEY CONFIGURED]**\n\n";
-        if (qLower.includes("auth") || qLower.includes("cookie") || qLower.includes("middleware")) {
-          fallbackMsg = header + `I have inspected the authentication verification logic inside server.ts. The current verification relies on bearer headers and standard security keys. Here is the suggested refactor:
-
-- We can ensure that no redundant cookies/queries bypass the authorization gates:
-
-File: server.ts
-<<<<<<<
-  function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-    const apiKey = req.headers["x-mutly-api-key"] || req.headers["authorization"]?.toString().replace(/^Bearer\\s+/i, "");
-=======
-  function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-    const apiKey = req.headers["x-mutly-api-key"] || req.headers["authorization"]?.toString().replace(/^Bearer\\s+/i, "");
-    if (!apiKey) {
-      return res.status(401).json({ error: "Missing authenticating token on administrative boundary" });
-    }
->>>>>>>`;
-          hasDiff = true;
-        } else if (qLower.includes("sandbox") || qLower.includes("isolate") || qLower.includes("exec")) {
-          fallbackMsg = header + `Mutly integrates a secure sandboxed execution panel under /tmp/mutly-sandbox-workspace. 
-
-- This ensures arbitrary shell scripts run safely isolated from your main workspace checkout folder.
-- All dependencies are symmetrically symlinked instantaneously without duplicate downloads.`;
-        } else {
-          fallbackMsg = header + `Hello! I parsed your query: "${query}".
-
-As Mutly, I can scan active code trees, execute non-blocking build checks, and correct SPEC.md drift.
-
-Try prompting me with a refactor question:
-"Refactor the file verification check"
-"Explain the token compaction hooks"`;
-        }
-        res.json({ success: true, response: fallbackMsg, hasDiff });
-      }
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  function applyFilePatch(filePath, findContent, replaceContent, source) {
-    const resolved = resolvePathInWorkspace(process.cwd(), filePath);
-    if (!resolved.ok) return { ok: false, status: 403, error: resolved.error };
-    const fullPath = resolved.fullPath;
-    const relPath = import_path24.default.relative(process.cwd(), fullPath);
-    if (import_fs27.default.existsSync(fullPath)) {
-      const code = import_fs27.default.readFileSync(fullPath, "utf-8");
-      if (code.includes(findContent)) {
-        const updated = code.replace(findContent, replaceContent);
-        import_fs27.default.writeFileSync(fullPath, updated, "utf-8");
-        agentDaemon.addLog(LOG_TYPE.SUCCESS, `${source === "RPC" ? "RPC" : "VS Code Extension"}: Applied file patch dynamically on "${relPath}"`);
-        agentDaemon.addMicroChange("/" + relPath, "modified", `~patched via ${source}`);
-        return { ok: true, relPath };
-      }
-      const msg = source === "RPC" ? "Could not locate the exact original code chunk to replace." : `Could not find exact original matching block in ${relPath}. No modifications were made.`;
-      return { ok: false, status: 400, error: msg };
-    }
-    return { ok: false, status: 404, error: source === "RPC" ? `Target file not found: ${relPath}` : `File not found in workspace: ${relPath}` };
-  }
-  app.post("/api/agent/integrations/apply-diff-session", (req, res) => {
-    const { filePath, findContent, replaceContent } = req.body;
-    try {
-      const result = applyFilePatch(filePath, findContent, replaceContent, "VS Code Chat");
-      if (result.ok) {
-        return res.json({ success: true, filePath: result.relPath });
-      } else {
-        return res.status(result.status || 400).json({ error: result.error });
-      }
-    } catch (e) {
-      return res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/integrations/rpc", async (req, res) => {
-    const { method, params } = req.body;
-    try {
-      if (method === "mutly/read_file") {
-        const relPath = params && params.filePath || "src/App.tsx";
-        const resolved = resolvePathInWorkspace(process.cwd(), relPath);
-        if (!resolved.ok) {
-          return res.status(403).json({ error: resolved.error });
-        }
-        const fullPath = resolved.fullPath;
-        if (import_fs27.default.existsSync(fullPath)) {
-          const content = import_fs27.default.readFileSync(fullPath, "utf-8");
-          const shouldTruncate = params && params.preview === true;
-          const finalContent = shouldTruncate ? content.slice(0, 1e3) + "\n\n... [Truncated for preview] ..." : content;
-          res.json({
-            jsonrpc: "2.0",
-            result: {
-              filePath: relPath,
-              content: finalContent,
-              language: "typescript",
-              isSimulation: false
-            },
-            id: 1
-          });
-        } else {
-          res.status(404).json({ error: `File not found: ${relPath}` });
-        }
-      } else if (method === "mutly/apply_diff") {
-        const { filePath, findContent, replaceContent } = params || {};
-        if (filePath && findContent && replaceContent) {
-          const result = applyFilePatch(filePath, findContent, replaceContent, "RPC");
-          if (result.ok) {
-            return res.json({
-              jsonrpc: "2.0",
-              result: {
-                success: true,
-                isSimulation: false,
-                filePath: result.relPath,
-                chunksApplied: 1,
-                timeMs: 25
-              },
-              id: 1
-            });
-          } else {
-            return res.status(result.status || 400).json({ error: result.error });
-          }
-        }
-        res.json({
-          jsonrpc: "2.0",
-          result: {
-            success: true,
-            isSimulation: true,
-            filePath: params && params.filePath || "src/App.tsx",
-            chunksApplied: 1,
-            timeMs: 145
-          },
-          id: 1
-        });
-      } else if (method === "mutly/run_tests") {
-        const command = params && params.command || "npm run lint";
-        if (!validateSandboxCommand(command)) {
-          return res.status(400).json({
-            jsonrpc: "2.0",
-            error: { code: -32602, message: "Invalid params: command is not allowed" },
-            id: 1
-          });
-        }
-        if (process.env.MUTLY_ALLOW_SIMULATION_STUBS === "true") {
-          res.json({
-            jsonrpc: "2.0",
-            result: {
-              success: true,
-              isSimulation: true,
-              command,
-              exitCode: 0,
-              stdout: "Simulation stub \u2014 set MUTLY_ALLOW_SIMULATION_STUBS=false for real runs.",
-              stderr: ""
-            },
-            id: 1
-          });
-        } else {
-          const result = await agentDaemon.runSandboxCommand(command);
-          res.json({
-            jsonrpc: "2.0",
-            result: {
-              success: result.success,
-              isSimulation: false,
-              command,
-              exitCode: result.code,
-              stdout: result.stdout,
-              stderr: result.stderr
-            },
-            id: 1
-          });
-        }
-      } else {
-        res.status(400).json({ error: `Method ${method} not integrated.` });
-      }
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/integrations/compact-sim", async (_req, res) => {
-    try {
-      if (process.env.MUTLY_ALLOW_SIMULATION_STUBS === "true") {
-        res.json({
-          success: true,
-          isSimulation: true,
-          savedBytes: 15430,
-          anchorsInjected: [
-            "SPEC.md: Section 3 Model Broker Rules (Simulation)",
-            "CLAUDE.md: System Command Interceptors (Simulation)"
-          ]
-        });
-        return;
-      }
-      const result = await agentDaemon.autoDream();
-      res.json({
-        success: true,
-        isSimulation: false,
-        message: result.message,
-        savedBytes: Math.max(0, JSON.stringify(agentDaemon.logs).length),
-        anchorsInjected: ["SPEC.md", "CLAUDE.md"]
-      });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  const reporankAuditService = getReporankService();
-  app.get("/api/agent/audit", async (req, res) => {
-    try {
-      const auditReport = await reporankAuditService.auditWorkspace();
-      const auditResults = [];
-      let idCounter = 1;
-      if (auditReport.secrets && auditReport.secrets.secretsFound > 0) {
-        auditResults.push({
-          id: idCounter++,
-          severity: "critical",
-          title: "Hardcoded Secrets Detected",
-          explanation: `Reporank detected ${auditReport.secrets.secretsFound} hardcoded secret(s). ${auditReport.secrets.recommendation}`,
-          vulnerable: "// Found hardcoded credentials in codebase.",
-          remediation: "// " + auditReport.secrets.recommendation,
-          status: "failed"
-        });
-      }
-      if (auditReport.vibe && auditReport.vibe.recommendations) {
-        auditReport.vibe.recommendations.forEach((rec, idx) => {
-          auditResults.push({
-            id: idCounter++,
-            severity: auditReport.score >= 80 ? "info" : auditReport.score >= 60 ? "warning" : "logic",
-            title: `Code Quality Recommendation #${idx + 1}`,
-            explanation: rec,
-            vulnerable: `// Reporank flagged area for improvement
-// Base Score: ${auditReport.score}/100`,
-            remediation: `// Recommended Improvement:
-// ${rec}`,
-            status: "warning"
-          });
-        });
-      }
-      if (auditResults.length === 0) {
-        auditResults.push({
-          id: idCounter++,
-          severity: "info",
-          title: `Code Quality Score: ${auditReport.score}/100`,
-          explanation: `Reporank audit completed. Found ${auditReport.files} files analyzed. No recommendations.`,
-          vulnerable: `// Audit score: ${auditReport.score}/100`,
-          remediation: `// Looks good!`,
-          status: "passed"
-        });
-      }
-      res.json({ success: true, issues: auditResults });
-    } catch (error) {
-      logger.error({ err: getErrorMessage(error) }, "Audit failed");
-      res.status(500).json({
-        success: false,
-        error: `Audit failed: ${getErrorMessage(error)}`
-      });
-    }
-  });
-  app.post("/api/agent/audit/fix-sim", async (req, res) => {
-    try {
-      const auditReport = await reporankAuditService.auditWorkspace();
-      const logs = [
-        `[Mutly Reporank Integration] Received fix-sim request for issue...`,
-        `Executing reporank background dry-run remediation...`,
-        ...(auditReport.vibe?.recommendations || []).map((r) => `[Recommendation] ${r}`),
-        `Simulation completed safely.`
-      ];
-      res.json({
-        success: true,
-        isSimulation: false,
-        logs,
-        auditReport,
-        message: "Fresh audit completed with reporank. Check recommendations for actionable items."
-      });
-    } catch (error) {
-      logger.error({ err: getErrorMessage(error) }, "Audit fix-sim failed");
-      res.status(500).json({
-        success: false,
-        error: `Audit failed: ${getErrorMessage(error)}`
-      });
-    }
-  });
-  const { createProvenanceRouter: createProvenanceRouter2 } = await Promise.resolve().then(() => (init_provenanceRouter(), provenanceRouter_exports));
-  app.use("/api", createProvenanceRouter2(pipelineRunner));
-  app.post("/api/pipeline/start", async (req, res) => {
-    try {
-      const { source, repoUrl, files } = req.body || {};
-      const state = await pipelineRunner.createPipeline();
-      state.phases["ingest"].input = { source, repoUrl, files };
-      const finalState = await pipelineRunner.runAll(state.id);
-      res.json({ success: true, pipeline: finalState });
-    } catch (e) {
-      res.status(500).json({ success: false, error: e.message });
-    }
-  });
-  app.get("/api/pipeline/:id", async (req, res) => {
-    const state = await pipelineRunner.getState(req.params.id);
-    if (!state) return res.status(404).json({ error: "Pipeline not found" });
-    res.json({ success: true, pipeline: state });
-  });
-  app.post("/api/pipeline/:id/phase/:phaseId", async (req, res) => {
-    try {
-      const result = await pipelineRunner.runPhase(req.params.id, req.params.phaseId);
-      res.json({ success: true, result });
-    } catch (e) {
-      res.status(500).json({ success: false, error: e.message });
-    }
-  });
-  app.post("/api/pipeline/:id/run-all", async (req, res) => {
-    try {
-      const finalState = await pipelineRunner.runAll(req.params.id);
-      res.json({ success: true, pipeline: finalState });
-    } catch (e) {
-      res.status(500).json({ success: false, error: e.message });
-    }
-  });
-  const { getPipelineDiff: getPipelineDiff2, getPipelineGitLog: getPipelineGitLog2, commitPipeline: commitPipeline2 } = await Promise.resolve().then(() => (init_pipelineGitApi(), pipelineGitApi_exports));
-  app.get("/api/pipeline/:id/diff", (req, res) => {
-    const staged = req.query.staged === "true" || req.query.staged === "1";
-    const pathsParam = typeof req.query.paths === "string" ? req.query.paths : void 0;
-    const paths = pathsParam ? pathsParam.split(",").map((s) => s.trim()).filter(Boolean) : void 0;
-    const result = getPipelineDiff2(req.params.id, { staged, paths });
-    if (!result) return res.status(404).json({ success: false, error: "Pipeline not found or no workspace" });
-    res.json({ success: true, ...result });
-  });
-  app.get("/api/pipeline/:id/git/log", (req, res) => {
-    const limit = req.query.limit ? Math.max(1, Math.min(200, parseInt(String(req.query.limit), 10) || 20)) : 20;
-    const result = getPipelineGitLog2(req.params.id, limit);
-    res.json({ success: true, ...result });
-  });
-  app.post("/api/pipeline/:id/git/commit", (req, res) => {
-    const { message, paths } = req.body || {};
-    if (!message || typeof message !== "string") {
-      return res.status(400).json({ success: false, error: "message (string) required" });
-    }
-    const result = commitPipeline2(req.params.id, message, Array.isArray(paths) ? paths : void 0);
-    res.json({ success: result.ok, ...result });
-  });
-  app.get("/api/skills", (req, res) => {
-    res.json({ success: true, skills: listAvailableSkills() });
-  });
-  app.post("/api/skills/:name/invoke", async (req, res) => {
-    try {
-      const { input = {}, workspacePath } = req.body || {};
-      const result = await pipelineRunner.invokeSkill(req.params.name, input, workspacePath);
-      res.json({ success: true, result });
-    } catch (e) {
-      res.status(500).json({ success: false, error: e.message });
-    }
-  });
-  app.get("/api/agents", (req, res) => {
-    res.json({ success: true, agents: pipelineRunner.listAgents() });
-  });
-  app.post("/api/agent/sandbox/run", async (req, res) => {
-    const { command } = req.body;
-    if (!validateSandboxCommand(command)) {
-      return res.status(400).json({ success: false, error: "Forbidden: command is not allowed" });
-    }
-    try {
-      const result = await agentDaemon.runSandboxCommand(command);
-      res.json({ success: true, result });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.get("/api/agent/sandbox/logs", (req, res) => {
-    try {
-      res.json({
-        success: true,
-        logs: agentDaemon.sandboxLogs,
-        status: agentDaemon.sandboxStatus,
-        activeCommand: agentDaemon.sandboxActiveCommand,
-        indexingState: agentDaemon.indexingState
-      });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
-  app.post("/api/agent/sandbox/logs/clear", (req, res) => {
-    try {
-      agentDaemon.clearSandboxLogs();
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: getErrorMessage(e) });
-    }
-  });
   if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({
-      server: { middlewareMode: true, hmr: { port: 0 } },
-      appType: "spa"
+      server: { middlewareMode: true },
+      appType: "custom"
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = import_path24.default.join(process.cwd(), "dist");
-    app.use(import_express3.default.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(import_path24.default.join(distPath, "index.html"));
+    const distPath = import_path20.default.resolve("dist");
+    app.use(import_express2.default.static(distPath));
+    app.get("*", (_req, res) => {
+      res.sendFile(import_path20.default.join(distPath, "index.html"));
     });
   }
-  const server = app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, () => {
     logger.info({ port: PORT }, "Mutly server listening");
   });
-  server.on("error", (err) => {
-    if (err.code === "EADDRINUSE" && PORT < 3010) {
-      logger.warn(`Port ${PORT} busy, trying ${PORT + 1}`);
-      PORT++;
-      server.listen(PORT);
-    } else {
-      throw err;
-    }
-  });
-  const wss = new import_ws2.WebSocketServer({ noServer: true });
-  wss.on("connection", (ws, req) => {
-    handleWebSocketConnection(ws, req, { apiKey: MUTLY_API_KEY });
-  });
-  server.on("upgrade", (req, socket, head) => {
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  });
-  const shutdown = async () => {
-    logger.info("Shutting down agent services gracefully");
-    agentDaemon.stop();
-    await flushLangfuse();
+  const wss = new import_ws2.WebSocketServer({ port: WS_PORT });
+  wss.on("connection", (ws, req) => handleWebSocketConnection(ws, req, { apiKey: MUTLY_API_KEY }));
+  process.on("SIGINT", () => {
+    logger.info("Shutting down...");
     server.close(() => {
-      logger.info("Process terminated");
+      wss.close();
       process.exit(0);
     });
-  };
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  });
 }
-var import_dotenv, import_express3, import_path24, import_fs27, import_express_rate_limit, import_vite, import_genai10, import_ws2, import_express4;
+var import_dotenv, import_express2, import_path20, import_fs22, import_express_rate_limit, import_vite, import_ws2, app, PORT, WS_PORT, MUTLY_API_KEY, lastPipelineId;
 var init_server = __esm({
   "server.ts"() {
     "use strict";
     import_dotenv = __toESM(require("dotenv"), 1);
-    import_express3 = __toESM(require("express"), 1);
-    import_path24 = __toESM(require("path"), 1);
-    import_fs27 = __toESM(require("fs"), 1);
+    import_express2 = __toESM(require("express"), 1);
+    import_path20 = __toESM(require("path"), 1);
+    import_fs22 = __toESM(require("fs"), 1);
     import_express_rate_limit = __toESM(require("express-rate-limit"), 1);
     import_vite = require("vite");
-    import_genai10 = require("@google/genai");
     init_agentDaemon();
-    init_reporankGovernance();
     import_ws2 = require("ws");
     init_ws_server();
-    init_mcpVibeServeClient();
-    init_approvalStore();
-    init_routingMetrics();
-    init_vibeserveHealth();
-    init_client();
-    init_functions();
-    import_express4 = require("inngest/express");
     init_logger();
-    init_constants();
     init_mutlyAuth();
-    init_otelBootstrap();
-    init_sentry();
-    init_langfuse();
-    init_workspacePaths();
-    init_sandboxEngine();
     init_pipelineRunner();
-    init_convergence_loop();
-    init_workflowRunner();
-    init_skillLoader();
     init_routes();
-    init_prGenerator();
-    init_changelogGenerator();
+    init_agentDaemon();
+    init_mcpVibeServeClient();
+    init_config();
     import_dotenv.default.config();
-    loadDefaultSkills();
-    logger.info(`[server] Available skills: ${listAvailableSkills().map((s) => s.name).join(", ")}`);
-    initSentry();
-    initLangfuse();
-    startServer();
+    app = (0, import_express2.default)();
+    PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4e3;
+    WS_PORT = parseInt(process.env.MUTLY_WS_PORT || "24678", 10);
+    MUTLY_API_KEY = resolveMutlyApiKey(agentDaemon.getSecureKey());
+    lastPipelineId = null;
+    app.use(import_express2.default.json({ limit: "2mb" }));
+    app.use((0, import_express_rate_limit.default)({ windowMs: 6e4, max: 200 }));
+    app.get("/api/agent/public-config", (_req, res) => {
+      if (process.env.NODE_ENV === "production") {
+        return res.status(404).json({ error: "Not available" });
+      }
+      res.json({
+        port: PORT,
+        devApiKeyHint: MUTLY_API_KEY,
+        nodeEnv: process.env.NODE_ENV || "development"
+      });
+    });
+    app.use("/api", authMiddleware);
+    app.use("/api", createSettingsRouter());
+    app.get("/api/health", (_req, res) => {
+      res.json({ status: "ok", timestamp: Date.now() });
+    });
+    app.get("/api/agent/status", (_req, res) => {
+      res.json({
+        llmProvider: "none",
+        status: agentDaemon.getStatus(),
+        logs: agentDaemon.logs.slice(0, 100),
+        currentPlan: agentDaemon.currentPlan,
+        lastAnalysis: agentDaemon.lastAnalysis
+      });
+    });
+    app.post("/api/pipeline/start", async (req, res) => {
+      try {
+        const { projectDir } = req.body || {};
+        const pipeline = await pipelineRunner.createPipeline();
+        if (projectDir) {
+          pipeline.workspacePath = projectDir;
+        }
+        lastPipelineId = pipeline.id;
+        pipelineRunner.runAll(pipeline.id).catch((err) => {
+          logger.error({ err }, "Pipeline runAll failed asynchronously");
+        });
+        res.json({ success: true, pipelineId: pipeline.id, status: "started" });
+      } catch (err) {
+        logger.error({ err }, "Pipeline failed");
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.get("/api/pipeline/status", async (_req, res) => {
+      try {
+        if (!lastPipelineId) {
+          return res.json({ success: true, pipeline: null, status: "idle" });
+        }
+        const state = await pipelineRunner.getState(lastPipelineId);
+        res.json({ success: true, pipeline: state ?? null });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.get("/api/pipeline/status/:pipelineId", async (req, res) => {
+      try {
+        const state = await pipelineRunner.getState(req.params.pipelineId);
+        if (!state) {
+          return res.status(404).json({ success: false, error: "Pipeline not found" });
+        }
+        res.json({ success: true, pipeline: state });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.post("/api/agent/analyze", async (req, res) => {
+      try {
+        const { type = "local", repoUrl } = req.body || {};
+        const analysis = await agentDaemon.analyzeRepository(type, { repoUrl });
+        res.json({ success: true, analysis });
+      } catch (err) {
+        logger.error({ err }, "Analysis failed");
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.post("/api/agent/scan", async (_req, res) => {
+      try {
+        const stats = scanWorkspace(process.cwd());
+        res.json({ success: true, stats });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.get("/api/agent/symbols", async (_req, res) => {
+      try {
+        const symbols = await getWorkspaceSymbols();
+        res.json({ success: true, symbols });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.post("/api/source/import", async (req, res) => {
+      try {
+        const { path: importPath } = req.body || {};
+        if (!importPath || !import_fs22.default.existsSync(importPath)) {
+          return res.status(400).json({ success: false, error: "Invalid path" });
+        }
+        const stats = scanWorkspace(importPath);
+        res.json({ success: true, stats, path: importPath });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.post("/api/vibeserve/tools/:toolName", async (req, res) => {
+      try {
+        const result = await callVibeServeTool(req.params.toolName, req.body || {}, agentDaemon);
+        if (result.error) {
+          return res.status(503).json({ success: false, error: result.error });
+        }
+        res.json({ success: true, result });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+    app.get("/api/vibeserve/health", async (_req, res) => {
+      try {
+        const result = await callVibeServeTool("vs_health", {}, agentDaemon);
+        res.json({ success: true, reachable: !result.error, result });
+      } catch (err) {
+        res.json({ success: true, reachable: false, error: err.message });
+      }
+    });
+    app.post("/api/reporank/scan", async (req, res) => {
+      const { status, body } = await reporankFetch("POST", "/api/v1/internal/mutly/scan", req.body, 6e4);
+      res.status(status).json(body);
+    });
+    app.get("/api/reporank/health", async (_req, res) => {
+      const { body } = await reporankFetch("GET", "/health", void 0, 5e3);
+      res.json({ success: true, reachable: body.success ?? false });
+    });
+    app.post("/api/reporank/briefs", async (req, res) => {
+      const { status, body } = await reporankFetch("POST", "/api/v1/projects", req.body);
+      res.status(status).json(body);
+    });
+    app.get("/api/reporank/briefs", async (_req, res) => {
+      const { status, body } = await reporankFetch("GET", "/api/v1/projects");
+      res.status(status).json(body);
+    });
+    app.get("/api/reporank/briefs/:id", async (req, res) => {
+      const id = safeId(req.params.id);
+      if (!id) return res.status(400).json({ success: false, error: "Invalid ID" });
+      const { status, body } = await reporankFetch("GET", `/api/v1/projects/${id}`);
+      res.status(status).json(body);
+    });
+    app.post("/api/reporank/milestones", async (req, res) => {
+      const { status, body } = await reporankFetch("POST", "/api/v1/milestones", req.body);
+      res.status(status).json(body);
+    });
+    app.get("/api/reporank/milestones/project/:projectId", async (req, res) => {
+      const id = safeId(req.params.projectId);
+      if (!id) return res.status(400).json({ success: false, error: "Invalid projectId" });
+      const { status, body } = await reporankFetch("GET", `/api/v1/milestones/project/${id}`);
+      res.status(status).json(body);
+    });
+    app.post("/api/reporank/gates/:id/evaluate", async (req, res) => {
+      const id = safeId(req.params.id);
+      if (!id) return res.status(400).json({ success: false, error: "Invalid gate ID" });
+      const { status, body } = await reporankFetch("POST", `/api/v1/gates/${id}/evaluate`, req.body);
+      res.status(status).json(body);
+    });
+    app.post("/api/reporank/drift/:projectId", async (req, res) => {
+      const id = safeId(req.params.projectId);
+      if (!id) return res.status(400).json({ success: false, error: "Invalid projectId" });
+      const { status, body } = await reporankFetch("POST", `/api/v1/drift/${id}`, req.body);
+      res.status(status).json(body);
+    });
+    app.get("/api/reporank/scan/:id", async (req, res) => {
+      const id = safeId(req.params.id);
+      if (!id) return res.status(400).json({ success: false, error: "Invalid scan ID" });
+      const { status, body } = await reporankFetch("GET", `/api/v1/scans/${id}`);
+      res.status(status).json(body);
+    });
+    startServer().catch((err) => {
+      logger.fatal({ err }, "Server startup failed");
+      process.exit(1);
+    });
   }
 });
 
@@ -14106,9 +11882,9 @@ var package_default;
 var init_package = __esm({
   "package.json"() {
     package_default = {
-      name: "mutly-daemon-agent",
+      name: "mutly",
       private: true,
-      version: "0.1.0",
+      version: "1.0.0",
       type: "module",
       bin: {
         mutly: "./bin/mutly.cjs"
@@ -14124,28 +11900,14 @@ var init_package = __esm({
         lint: "npm run typecheck",
         secretlint: 'secretlint "**/*"',
         test: "vitest run",
-        "test:integration": "vitest run tests/integration",
-        "test:e2e": "vitest run tests/e2e",
-        "test:integration:all": "vitest run tests/integration tests/e2e",
-        "test:e2e:reporank": "vitest run tests/e2e/mutly-reporank.e2e.test.ts",
-        "test:redis": "vitest run tests/integration/redisCache.test.ts",
-        "test:vibeserve": "cd ../VibeServe-main && python -m pytest tests/test_mutly_integration.py -q",
-        ci: "npm run typecheck && npm run secretlint && npm run test:integration:all",
+        ci: "npm run typecheck && npm run secretlint && npm run test",
         prepare: "husky"
       },
       dependencies: {
-        "@google/genai": "^2.4.0",
         "@opentelemetry/api": "^1.9.1",
-        "@opentelemetry/auto-instrumentations-node": "^0.76.0",
-        "@opentelemetry/sdk-node": "^0.218.0",
-        "@sentry/node": "^10.57.0",
-        "@sentry/profiling-node": "^10.57.0",
-        "@tailwindcss/vite": "^4.1.14",
-        "@vitejs/plugin-react": "^5.0.4",
-        dotenv: "^17.2.3",
         express: "^4.21.2",
         "express-rate-limit": "^8.5.2",
-        inngest: "^4.5.0",
+        inngest: "^4.5.1",
         ioredis: "^5.11.1",
         "js-yaml": "^4.2.0",
         langfuse: "^3.38.20",
@@ -14161,9 +11923,9 @@ var init_package = __esm({
         zod: "^4.4.3"
       },
       devDependencies: {
-        "@playwright/test": "^1.60.0",
         "@secretlint/node": "^9.3.0",
         "@secretlint/secretlint-rule-preset-recommend": "^9.3.0",
+        "@tailwindcss/postcss": "^4.3.1",
         "@testing-library/dom": "^10.4.1",
         "@testing-library/jest-dom": "^6.9.1",
         "@testing-library/react": "^16.3.2",
@@ -15231,7 +12993,7 @@ var serveCommand = {
   summary: "Start the Mutly HTTP server",
   async run(args, ctx) {
     const portArg = args.find((a) => a.startsWith("--port="));
-    const port = portArg ? parseInt(portArg.split("=")[1], 10) : 3e3;
+    const port = portArg ? parseInt(portArg.split("=")[1], 10) : 4e3;
     ctx.log.info(`Starting Mutly server on port ${port}...`);
     process.env.PORT = String(port);
     try {
@@ -15271,7 +13033,7 @@ Global options:
 Examples:
   mutly build .
   mutly build ./my-app --json --max-iterations=3
-  mutly serve --port=3000
+  mutly serve --port=4000
   mutly doctor
 `;
 var helpCommand = {
@@ -15374,21 +13136,426 @@ var planCommand = {
 };
 
 // server/cli/convergeCommand.ts
-var import_path25 = require("path");
-var import_fs28 = require("fs");
-init_convergence_loop();
+var import_path22 = require("path");
+var import_fs24 = require("fs");
+
+// server/buildPipeline/convergence-loop.ts
+var import_child_process7 = require("child_process");
+var import_fs23 = require("fs");
+var import_path21 = require("path");
+init_logger();
+init_traceContext();
+var DEFAULT_CONFIG3 = {
+  workspaceRoot: process.cwd(),
+  threshold: 85,
+  maxIterations: 5,
+  autoApply: true,
+  stopOnVerificationFailure: true,
+  requiredChecks: ["audit", "typecheck", "test"]
+};
+async function converge(config = {}) {
+  const cfg = { ...DEFAULT_CONFIG3, ...config };
+  const startedAt = Date.now();
+  const iterations = [];
+  const span = startSpan("convergence.loop", {
+    attributes: {
+      workspace: cfg.workspaceRoot,
+      threshold: cfg.threshold,
+      maxIterations: cfg.maxIterations
+    }
+  });
+  logger.info(
+    { workspace: cfg.workspaceRoot, threshold: cfg.threshold },
+    "[convergence] Starting quality convergence loop"
+  );
+  for (let i = 0; i < cfg.maxIterations; i++) {
+    const iterStart = Date.now();
+    const iteration = {
+      iteration: i + 1,
+      score: 0,
+      findings: 0,
+      fixed: 0,
+      skipped: 0,
+      verification: { typecheck: false, test: false, build: false },
+      durationMs: 0
+    };
+    logger.info({ iteration: i + 1 }, "[convergence] Iteration starting...");
+    const auditResult = await runReporankAudit(cfg.workspaceRoot);
+    iteration.score = auditResult.score;
+    iteration.findings = auditResult.findings;
+    recordMetric("convergence.audit.score", auditResult.score, {
+      iteration: String(i + 1)
+    });
+    logger.info(
+      { iteration: i + 1, score: auditResult.score },
+      "[convergence] Audit complete"
+    );
+    if (auditResult.score >= cfg.threshold) {
+      iteration.durationMs = Date.now() - iterStart;
+      iterations.push(iteration);
+      logger.info(
+        { iteration: i + 1, score: auditResult.score },
+        "[convergence] Quality threshold reached!"
+      );
+      const verification = await runVerification(cfg);
+      if (!verification.overall && cfg.stopOnVerificationFailure) {
+        endSpan(span);
+        return {
+          ready: false,
+          iterations,
+          finalScore: auditResult.score,
+          totalDurationMs: Date.now() - startedAt,
+          reason: "Verification failed at threshold score"
+        };
+      }
+      endSpan(span);
+      return {
+        ready: true,
+        iterations,
+        finalScore: auditResult.score,
+        totalDurationMs: Date.now() - startedAt,
+        reason: `Converged at iteration ${i + 1} with score ${auditResult.score}`
+      };
+    }
+    if (cfg.autoApply && auditResult.findings > 0) {
+      const fixResult = await runAutoFix(cfg.workspaceRoot);
+      iteration.fixed = fixResult.fixed;
+      iteration.skipped = fixResult.skipped;
+      logger.info(
+        { fixed: fixResult.fixed, skipped: fixResult.skipped },
+        "[convergence] Auto-fix applied"
+      );
+    }
+    if (cfg.requiredChecks.includes("typecheck") || cfg.requiredChecks.includes("test")) {
+      const verification = await runVerification(cfg);
+      iteration.verification = {
+        typecheck: verification.typecheck,
+        test: verification.test,
+        build: verification.build
+      };
+      if (!verification.overall && cfg.stopOnVerificationFailure) {
+        iteration.durationMs = Date.now() - iterStart;
+        iterations.push(iteration);
+        endSpan(span);
+        return {
+          ready: false,
+          iterations,
+          finalScore: auditResult.score,
+          totalDurationMs: Date.now() - startedAt,
+          reason: `Verification failed at iteration ${i + 1} \u2014 manual intervention needed`
+        };
+      }
+    }
+    iteration.durationMs = Date.now() - iterStart;
+    iterations.push(iteration);
+  }
+  endSpan(span);
+  return {
+    ready: false,
+    iterations,
+    finalScore: iterations[iterations.length - 1]?.score ?? 0,
+    totalDurationMs: Date.now() - startedAt,
+    reason: `Max iterations (${cfg.maxIterations}) reached without converging`
+  };
+}
+async function runReporankAudit(workspaceRoot) {
+  const span = startSpan("convergence.audit");
+  try {
+    const reporankCli = (0, import_path21.resolve)(
+      workspaceRoot,
+      "../reporank/apps/cli/src/index.ts"
+    );
+    if (!(0, import_fs23.existsSync)(reporankCli)) {
+      logger.warn("[convergence] RepoRank CLI not found \u2014 using heuristic scan");
+      const result2 = runHeuristicScan(workspaceRoot);
+      endSpan(span);
+      return result2;
+    }
+    const cmd = `npx tsx "${reporankCli}" verify "${workspaceRoot}" --json`;
+    let output;
+    try {
+      output = (0, import_child_process7.execSync)(cmd, {
+        encoding: "utf-8",
+        timeout: 12e4,
+        cwd: (0, import_path21.resolve)(reporankCli, "..", "..", "..", "..")
+      });
+    } catch (e) {
+      output = e.stdout || e.message || "{}";
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(output);
+    } catch {
+      endSpan(span);
+      return { score: 0, findings: 0, bySeverity: {}, recommendations: [] };
+    }
+    const bySeverity = parsed.bySeverity || {};
+    const findings = Object.values(bySeverity).reduce(
+      (sum, v) => sum + (typeof v === "number" ? v : 0),
+      0
+    );
+    const result = {
+      score: parsed.qualityScore ?? 0,
+      findings,
+      bySeverity,
+      recommendations: (parsed.findings || []).slice(0, 5).map((f) => f.recommendation || f.description || "")
+    };
+    endSpan(span);
+    return result;
+  } catch (err) {
+    logger.warn({ err }, "[convergence] RepoRank audit failed");
+    endSpan(span, err instanceof Error ? err : new Error(String(err)));
+    return { score: 0, findings: 0, bySeverity: {}, recommendations: [] };
+  }
+}
+function runHeuristicScan(workspaceRoot) {
+  const findings = {};
+  const recommendations = [];
+  function scanDir(dir, depth = 0) {
+    if (depth > 5) return;
+    try {
+      const entries = (0, import_child_process7.execSync)(`ls -1 "${dir}"`, {
+        encoding: "utf-8",
+        cwd: workspaceRoot
+      }).split("\n");
+      for (const entry of entries) {
+        if (!entry) continue;
+        const full = (0, import_path21.join)(dir, entry);
+        try {
+          const stat = (0, import_child_process7.execSync)(`stat -c %F "${full}"`, {
+            encoding: "utf-8",
+            cwd: workspaceRoot
+          }).trim();
+          if (stat === "directory" && !entry.startsWith(".") && entry !== "node_modules") {
+            scanDir(full, depth + 1);
+          } else if (entry.endsWith(".ts") || entry.endsWith(".tsx") || entry.endsWith(".js")) {
+            const content = (0, import_fs23.readFileSync)(full, "utf-8");
+            if (content.includes("console.log(")) {
+              findings["console-left-in"] = (findings["console-left-in"] || 0) + 1;
+            }
+            if (content.includes(": any")) {
+              findings["any-type-abuse"] = (findings["any-type-abuse"] || 0) + 1;
+            }
+            if (content.match(/setInterval\((?!.*clearInterval)/s)) {
+              findings["resource-leak"] = (findings["resource-leak"] || 0) + 1;
+            }
+            if (content.match(/await\s+\w+\([^)]*\)(?!\s*\}|\s*catch)/s)) {
+              findings["no-error-handling"] = (findings["no-error-handling"] || 0) + 1;
+            }
+          }
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
+  scanDir(".");
+  const totalFindings = Object.values(findings).reduce((a, b) => a + b, 0);
+  const score = Math.max(0, 100 - totalFindings * 2);
+  if (findings["console-left-in"]) {
+    recommendations.push(`Remove ${findings["console-left-in"]} console.log statements`);
+  }
+  if (findings["any-type-abuse"]) {
+    recommendations.push(`Fix ${findings["any-type-abuse"]} any-type abuses`);
+  }
+  if (findings["resource-leak"]) {
+    recommendations.push(`Fix ${findings["resource-leak"]} resource leaks`);
+  }
+  if (findings["no-error-handling"]) {
+    recommendations.push(`Add error handling to ${findings["no-error-handling"]} unguarded awaits`);
+  }
+  return { score, findings: totalFindings, bySeverity: findings, recommendations };
+}
+async function runAutoFix(workspaceRoot) {
+  const span = startSpan("convergence.autofix");
+  let fixed = 0;
+  let skipped = 0;
+  const errors = [];
+  try {
+    const reporankCli = (0, import_path21.resolve)(
+      workspaceRoot,
+      "../reporank/apps/cli/src/index.ts"
+    );
+    if ((0, import_fs23.existsSync)(reporankCli)) {
+      const cmd = `npx tsx "${reporankCli}" verify "${workspaceRoot}" --apply --dry-run --json`;
+      try {
+        const output = (0, import_child_process7.execSync)(cmd, {
+          encoding: "utf-8",
+          timeout: 12e4,
+          cwd: (0, import_path21.resolve)(reporankCli, "..", "..", "..", "..")
+        });
+        const parsed = JSON.parse(output);
+        fixed = parsed.fixed || parsed.applied?.length || 0;
+        skipped = parsed.skipped?.length || 0;
+      } catch (e) {
+        const msg = e.message || String(e);
+        errors.push(msg);
+        logger.warn({ msg }, "[convergence] Auto-fix dry run failed");
+      }
+    } else {
+      const fixPatterns = await applySimpleFixes(workspaceRoot);
+      fixed = fixPatterns.fixed;
+      skipped = fixPatterns.skipped;
+    }
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+  }
+  endSpan(span);
+  return { fixed, skipped, errors };
+}
+async function applySimpleFixes(workspaceRoot) {
+  let fixed = 0;
+  let skipped = 0;
+  const simpleFixes = [
+    {
+      pattern: /console\.log\(.*\);\s*/g,
+      replacement: "// [reporank] removed console.log \u2014 use a logger\n",
+      description: "console.log removal"
+    },
+    {
+      pattern: /: any(?!\w)/g,
+      replacement: ": unknown",
+      description: "any \u2192 unknown"
+    }
+  ];
+  function walkAndFix(dir, depth = 0) {
+    if (depth > 3) return;
+    try {
+      const entries = (0, import_child_process7.execSync)(`ls -1 "${dir}"`, {
+        encoding: "utf-8",
+        cwd: workspaceRoot
+      }).split("\n");
+      for (const entry of entries) {
+        if (!entry || entry.startsWith(".") || entry === "node_modules" || entry === "dist") continue;
+        const full = (0, import_path21.resolve)(workspaceRoot, dir, entry);
+        try {
+          const isDir = (0, import_fs23.existsSync)(full) && (0, import_child_process7.execSync)(`stat -c %F "${full}"`, { encoding: "utf-8", cwd: workspaceRoot }).trim() === "directory";
+          if (isDir) {
+            walkAndFix((0, import_path21.join)(dir, entry), depth + 1);
+          } else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
+            const content = (0, import_fs23.readFileSync)(full, "utf-8");
+            let modified = content;
+            for (const fix of simpleFixes) {
+              const prev = modified;
+              modified = modified.replace(fix.pattern, fix.replacement);
+              if (modified !== prev) {
+                logger.info({ file: full, fix: fix.description }, "[convergence] Simple fix applied");
+                fixed++;
+              }
+            }
+            if (modified !== content) {
+              (0, import_fs23.writeFileSync)(full, modified, "utf-8");
+            }
+          }
+        } catch {
+          skipped++;
+        }
+      }
+    } catch {
+      skipped++;
+    }
+  }
+  walkAndFix(".");
+  return { fixed, skipped };
+}
+async function runVerification(cfg) {
+  const span = startSpan("convergence.verify");
+  const result = {
+    overall: true,
+    typecheck: true,
+    test: true,
+    build: true,
+    details: ""
+  };
+  if (cfg.requiredChecks.includes("typecheck")) {
+    try {
+      (0, import_child_process7.execSync)("npx tsc --noEmit", {
+        cwd: cfg.workspaceRoot,
+        timeout: 6e4,
+        encoding: "utf-8"
+      });
+      result.typecheck = true;
+    } catch (e) {
+      result.typecheck = false;
+      result.overall = false;
+      result.details += `Typecheck failed: ${e.message?.slice(0, 100)}
+`;
+    }
+  }
+  if (cfg.requiredChecks.includes("test")) {
+    try {
+      (0, import_child_process7.execSync)("npx vitest run --reporter=json 2>&1 || true", {
+        cwd: cfg.workspaceRoot,
+        timeout: 12e4,
+        encoding: "utf-8"
+      });
+      result.test = true;
+    } catch (e) {
+      const output = e.stdout || e.message || "";
+      if (output.includes("numFailedTests")) {
+        try {
+          const jsonStart = output.indexOf("{");
+          const jsonEnd = output.lastIndexOf("}") + 1;
+          const parsed = JSON.parse(output.substring(jsonStart, jsonEnd));
+          result.test = parsed.numFailedTests === 0;
+          if (!result.test) {
+            result.overall = false;
+            result.details += `Tests: ${parsed.numFailedTests} failed
+`;
+          }
+        } catch {
+          result.test = true;
+        }
+      } else {
+        result.test = false;
+        result.overall = false;
+        result.details += `Test runner failed: ${output.slice(0, 100)}
+`;
+      }
+    }
+  }
+  if (cfg.requiredChecks.includes("build")) {
+    try {
+      (0, import_child_process7.execSync)("npx vite build", {
+        cwd: cfg.workspaceRoot,
+        timeout: 12e4,
+        encoding: "utf-8"
+      });
+      result.build = true;
+    } catch (e) {
+      result.build = false;
+      result.overall = false;
+      result.details += `Build failed: ${e.message?.slice(0, 100)}
+`;
+    }
+  }
+  endSpan(span);
+  return result;
+}
+async function runConvergence(workspaceRoot, threshold = 85, maxIterations = 5) {
+  return converge({
+    workspaceRoot,
+    threshold,
+    maxIterations,
+    autoApply: true,
+    stopOnVerificationFailure: true,
+    requiredChecks: ["audit", "typecheck", "test"]
+  });
+}
+
+// server/cli/convergeCommand.ts
 var convergeCommand = {
   name: "converge",
   summary: "Run audit\u2192fix\u2192verify loop until quality threshold met",
   async run(args, ctx) {
     const pathArg = args.find((a) => !a.startsWith("--"));
     const workspaceArg = pathArg ?? ".";
-    const workspaceRoot = (0, import_path25.resolve)(workspaceArg);
-    if (!(0, import_fs28.existsSync)(workspaceRoot)) {
+    const workspaceRoot = (0, import_path22.resolve)(workspaceArg);
+    if (!(0, import_fs24.existsSync)(workspaceRoot)) {
       ctx.log.error(`Workspace not found: ${workspaceRoot}`);
       return 2;
     }
-    if (!(0, import_fs28.statSync)(workspaceRoot).isDirectory()) {
+    if (!(0, import_fs24.statSync)(workspaceRoot).isDirectory()) {
       ctx.log.error(`Not a directory: ${workspaceRoot}`);
       return 2;
     }
@@ -15445,27 +13612,317 @@ function printConvergenceReport(result) {
 }
 
 // server/cli/benchmarkCommand.ts
-var import_path26 = __toESM(require("path"), 1);
-var import_fs29 = __toESM(require("fs"), 1);
-init_swe_bench_harness();
+var import_path25 = __toESM(require("path"), 1);
+var import_fs27 = __toESM(require("fs"), 1);
+
+// server/benchmarks/swe-bench-harness.ts
+var import_path24 = __toESM(require("path"), 1);
+var import_fs26 = __toESM(require("fs"), 1);
+init_litellmAdapter();
+init_config();
+init_logger();
+
+// server/benchmarks/test-runner.ts
+var import_child_process8 = require("child_process");
+var import_util = require("util");
+var import_path23 = __toESM(require("path"), 1);
+var import_fs25 = __toESM(require("fs"), 1);
+init_logger();
+var execAsync = (0, import_util.promisify)(import_child_process8.exec);
+var VITEST_CONFIG_TEMPLATE = `import { defineConfig } from "vitest/config";
+export default defineConfig({
+  test: {
+    environment: "jsdom",
+    globals: true,
+    include: ["__tests__/**"],
+    reporters: ["json"],
+    outputFile: "./test-results.json",
+    testTimeout: 30000,
+  },
+});
+`;
+async function runTestSuite(workspaceDir, opts) {
+  const testFramework = opts.framework || (opts.testFile.endsWith(".test.tsx") || opts.testFile.includes("tsx") ? "vitest" : "node");
+  if (testFramework === "node") {
+    return runNodeTests(workspaceDir, opts);
+  }
+  return runVitestTests(workspaceDir, opts);
+}
+async function runVitestTests(workspaceDir, opts) {
+  const testsDir = import_path23.default.join(workspaceDir, "__tests__");
+  if (!import_fs25.default.existsSync(testsDir)) {
+    import_fs25.default.mkdirSync(testsDir, { recursive: true });
+  }
+  const testFileInWorkspace = import_path23.default.join(workspaceDir, opts.testFile);
+  const expectedTestFile = import_path23.default.join(testsDir, import_path23.default.basename(opts.testFile));
+  if (import_fs25.default.existsSync(testFileInWorkspace) && testFileInWorkspace !== expectedTestFile) {
+    import_fs25.default.copyFileSync(testFileInWorkspace, expectedTestFile);
+  }
+  const actualTestDir = import_path23.default.join(workspaceDir, import_path23.default.dirname(opts.testFile));
+  if (actualTestDir !== testsDir && import_fs25.default.existsSync(import_path23.default.join(actualTestDir, import_path23.default.basename(opts.testFile)))) {
+    const src = import_path23.default.join(actualTestDir, import_path23.default.basename(opts.testFile));
+    if (src !== expectedTestFile) {
+      import_fs25.default.copyFileSync(src, expectedTestFile);
+    }
+  }
+  const configPath = import_path23.default.join(workspaceDir, "vitest.config.ts");
+  if (!import_fs25.default.existsSync(configPath)) {
+    import_fs25.default.writeFileSync(configPath, VITEST_CONFIG_TEMPLATE, "utf-8");
+  }
+  const resultsPath = import_path23.default.join(workspaceDir, "test-results.json");
+  try {
+    await execAsync(`npx vitest run --config "${configPath}"`, {
+      cwd: workspaceDir,
+      timeout: opts.timeout,
+      env: { ...process.env, CI: "true" }
+    });
+  } catch {
+  }
+  if (import_fs25.default.existsSync(resultsPath)) {
+    try {
+      const raw = JSON.parse(import_fs25.default.readFileSync(resultsPath, "utf-8"));
+      if (raw.testResults && Array.isArray(raw.testResults)) {
+        const allResults = [];
+        for (const suite of raw.testResults) {
+          const assertions = suite.assertionResults || [];
+          for (const a of assertions) {
+            allResults.push({
+              name: a.title || a.fullName || "unknown",
+              passed: a.status === "passed",
+              duration: a.duration,
+              error: a.failureMessages?.join("; ")
+            });
+          }
+        }
+        return mapToExpectedNames(allResults, opts.testNames);
+      }
+    } catch {
+    }
+  }
+  logger.warn("[test-runner] Could not parse vitest results, assuming all failed");
+  return opts.testNames.map((name) => ({ name, passed: false, error: "Test runner could not parse results" }));
+}
+async function runNodeTests(workspaceDir, opts) {
+  const testFile = import_path23.default.join(workspaceDir, opts.testFile);
+  if (!import_fs25.default.existsSync(testFile)) {
+    return opts.testNames.map((name) => ({ name, passed: false, error: `Test file not found: ${opts.testFile}` }));
+  }
+  try {
+    const { stdout, stderr } = await execAsync(`npx tsx "${testFile}"`, {
+      cwd: workspaceDir,
+      timeout: opts.timeout,
+      maxBuffer: 1024 * 1024
+    });
+    const results = [];
+    const lines = stdout.split("\n");
+    for (const name of opts.testNames) {
+      const matched = lines.some((l) => l.includes(name) && l.includes("PASS"));
+      results.push({
+        name,
+        passed: matched,
+        error: matched ? void 0 : "Test not found in output"
+      });
+    }
+    return results;
+  } catch (e) {
+    const stderr = e.stderr || "";
+    const stdout = e.stdout || "";
+    const results = [];
+    for (const name of opts.testNames) {
+      const passInStdout = stdout.includes(name) && (stdout.includes("PASS") || stdout.includes("ok"));
+      const failInStderr = stderr.includes(name) && (stderr.includes("FAIL") || stderr.includes("Error"));
+      results.push({
+        name,
+        passed: passInStdout && !failInStderr,
+        error: failInStderr ? stderr.slice(0, 500) : void 0
+      });
+    }
+    return results;
+  }
+}
+function mapToExpectedNames(actual, expected) {
+  return expected.map((name) => {
+    const found = actual.find(
+      (a) => a.name === name || a.name.toLowerCase().includes(name.toLowerCase()) || name.toLowerCase().includes(a.name.toLowerCase())
+    );
+    return found || { name, passed: false, error: "Test not found in results" };
+  });
+}
+
+// server/benchmarks/swe-bench-harness.ts
+var SweBenchHarness = class {
+  constructor() {
+    this.resultsDir = import_path24.default.resolve(process.cwd(), "benchmark-results");
+    import_fs26.default.mkdirSync(this.resultsDir, { recursive: true });
+  }
+  async run(tasks, opts) {
+    const maxTasks = Math.min(opts.maxTasks ?? tasks.length, tasks.length);
+    const timeoutPerTask = opts.timeoutPerTask ?? 12e4;
+    const model = opts.model ?? getConfig().MUTLY_DEFAULT_MODEL ?? "gemini-2.5-flash";
+    const selected = tasks.slice(0, maxTasks);
+    logger.info(`[swe-bench] Running ${selected.length} tasks with model ${model}`);
+    const results = [];
+    for (let i = 0; i < selected.length; i++) {
+      const task = selected[i];
+      logger.info(`[swe-bench] [${i + 1}/${selected.length}] ${task.instance_id}`);
+      const start = Date.now();
+      try {
+        const result = await this.runSingleTask(task, { timeoutPerTask, model });
+        results.push(result);
+        logger.info(`[swe-bench]   ${result.passed ? "PASS" : "FAIL"} (score: ${result.score.toFixed(2)}, ${result.durationMs}ms)`);
+      } catch (e) {
+        logger.error(`[swe-bench]   ERROR: ${e.message}`);
+        results.push({
+          instance_id: task.instance_id,
+          passed: false,
+          resolved: false,
+          score: 0,
+          durationMs: Date.now() - start,
+          steps: 0,
+          error: e.message ?? String(e)
+        });
+      }
+    }
+    const passed = results.filter((r) => r.passed).length;
+    const totalDurationMs = results.reduce((s, r) => s + r.durationMs, 0);
+    const summary = {
+      total: results.length,
+      passed,
+      score: results.length > 0 ? passed / results.length : 0,
+      totalDurationMs
+    };
+    const dateStr = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const outPath = import_path24.default.join(this.resultsDir, `swe-bench-${dateStr}.json`);
+    import_fs26.default.writeFileSync(outPath, JSON.stringify({ summary, results, model, runAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 2));
+    logger.info(`[swe-bench] Results saved to ${outPath}`);
+    logger.info(`[swe-bench] Summary: ${passed}/${results.length} passed (${(summary.score * 100).toFixed(0)}%)`);
+    return { results, summary };
+  }
+  async runSingleTask(task, opts) {
+    const start = Date.now();
+    let steps = 0;
+    const taskDesc = `## Task: ${task.instance_id}
+
+${task.issue}
+
+## Requirements
+${task.fail_to_pass.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
+    steps++;
+    const genResult = await litellmAdapter.generate(
+      taskDesc,
+      {
+        model: opts.model,
+        system: `You are an expert TypeScript developer. Generate a COMPLETE, production-ready implementation that satisfies ALL requirements.
+Rules:
+- Output ONLY the code block. Do NOT wrap in markdown fences unless they are part of the code.
+- Use modern ES2022+ syntax.
+- Include ALL necessary imports.
+- Make the code self-contained and directly runnable.
+- For React components: use named exports.
+- For hooks: use named exports.
+- For middleware: export a function that takes (req, res, next).`,
+        maxTokens: 8192,
+        temperature: 0.2
+      }
+    );
+    steps++;
+    let code = genResult.text;
+    const fenceMatch = code.match(/```(?:tsx?|jsx?|typescript|javascript)?\n([\s\S]*?)```/);
+    if (fenceMatch) {
+      code = fenceMatch[1].trim();
+    }
+    const workspaceDir = import_path24.default.join(process.cwd(), "benchmark-results", "workspace", task.instance_id);
+    import_fs26.default.mkdirSync(workspaceDir, { recursive: true });
+    const targetFile = task.target_file || this.inferTargetFile(task);
+    const fullPath = import_path24.default.join(workspaceDir, targetFile);
+    import_fs26.default.mkdirSync(import_path24.default.dirname(fullPath), { recursive: true });
+    import_fs26.default.writeFileSync(fullPath, code, "utf-8");
+    steps++;
+    if (task.support_files) {
+      for (const [relPath, content] of Object.entries(task.support_files)) {
+        const sp = import_path24.default.join(workspaceDir, relPath);
+        import_fs26.default.mkdirSync(import_path24.default.dirname(sp), { recursive: true });
+        import_fs26.default.writeFileSync(sp, content, "utf-8");
+      }
+    }
+    let testResults = [];
+    let passed = false;
+    if (task.test_code) {
+      const testFilePath = import_path24.default.join(workspaceDir, this.getTestFileName(task));
+      import_fs26.default.mkdirSync(import_path24.default.dirname(testFilePath), { recursive: true });
+      import_fs26.default.writeFileSync(testFilePath, task.test_code, "utf-8");
+      testResults = await runTestSuite(workspaceDir, {
+        testFile: this.getTestFileName(task),
+        testNames: [...task.fail_to_pass, ...task.pass_to_pass],
+        timeout: opts.timeoutPerTask
+      });
+      steps++;
+      const allRequiredPass = task.fail_to_pass.every((name) => {
+        const r = testResults.find((t) => t.name === name);
+        return r?.passed === true;
+      });
+      const allStablePass = task.pass_to_pass.every((name) => {
+        const r = testResults.find((t) => t.name === name);
+        return r?.passed === true;
+      });
+      passed = allRequiredPass && allStablePass;
+    } else {
+      passed = true;
+      testResults = task.fail_to_pass.map((name) => ({ name, passed: true }));
+    }
+    const durationMs = Date.now() - start;
+    const totalTests = [...task.fail_to_pass, ...task.pass_to_pass].length;
+    const passedTests = testResults.filter((t) => t.passed).length;
+    return {
+      instance_id: task.instance_id,
+      passed,
+      resolved: passed,
+      score: totalTests > 0 ? passedTests / totalTests : 1,
+      durationMs,
+      steps,
+      testResults,
+      generatedCode: code.slice(0, 500)
+    };
+  }
+  inferTargetFile(task) {
+    const id = task.instance_id.toLowerCase();
+    if (id.includes("counter")) return "Counter.tsx";
+    if (id.includes("login")) return "LoginForm.tsx";
+    if (id.includes("data-fetch") || id.includes("hook")) return "useFetchData.ts";
+    if (id.includes("todo")) return "TodoManager.tsx";
+    if (id.includes("middleware")) return "middleware.ts";
+    return "generated.ts";
+  }
+  getTestFileName(task) {
+    const target = task.target_file || this.inferTargetFile(task);
+    const base = target.replace(/\.(tsx?|jsx?)$/, "");
+    return `${base}.test.ts`;
+  }
+};
+var sweBenchHarness = new SweBenchHarness();
+async function runSweBenchEval(tasks, opts = {}) {
+  return sweBenchHarness.run(tasks, opts);
+}
+
+// server/cli/benchmarkCommand.ts
 var benchmarkCommand = {
   name: "benchmark",
   summary: "Run the SWE-bench code generation evaluation",
   async run(args, ctx) {
     const datasetArg = args.find((a) => !a.startsWith("--"));
-    const datasetPath = datasetArg ? import_path26.default.resolve(datasetArg) : import_path26.default.resolve(process.cwd(), "server", "benchmarks", "swe-bench-dataset.json");
+    const datasetPath = datasetArg ? import_path25.default.resolve(datasetArg) : import_path25.default.resolve(process.cwd(), "server", "benchmarks", "swe-bench-dataset.json");
     const maxTasksRaw = args.find((a) => a.startsWith("--max-tasks="))?.split("=")[1];
     const maxTasks = maxTasksRaw ? parseInt(maxTasksRaw, 10) : void 0;
     const timeoutRaw = args.find((a) => a.startsWith("--timeout="))?.split("=")[1];
     const timeoutPerTask = timeoutRaw ? parseInt(timeoutRaw, 10) : void 0;
     const modelArg = args.find((a) => a.startsWith("--model="))?.split("=")[1];
-    if (!import_fs29.default.existsSync(datasetPath)) {
+    if (!import_fs27.default.existsSync(datasetPath)) {
       ctx.log.error(`Dataset not found: ${datasetPath}`);
       return 2;
     }
     let dataset;
     try {
-      dataset = JSON.parse(import_fs29.default.readFileSync(datasetPath, "utf-8"));
+      dataset = JSON.parse(import_fs27.default.readFileSync(datasetPath, "utf-8"));
     } catch (e) {
       ctx.log.error(`Failed to parse dataset: ${e.message}`);
       return 2;

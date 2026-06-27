@@ -25,7 +25,7 @@ Global options:
 Examples:
   mutly build .
   mutly build ./my-app --json --max-iterations=3
-  mutly serve --port=3000
+  mutly serve --port=4000
   mutly doctor
 `;
 

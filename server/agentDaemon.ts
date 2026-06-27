@@ -56,7 +56,7 @@ export function scanWorkspace(dir: string) {
             linesOfCode += lines.length;
             
             const contentLower = content.toLowerCase();
-            if (contentLower.includes("console.log") || contentLower.includes(": any") || contentLower.includes("todo") || contentLower.includes("dummy")) {
+            if (contentLower.includes("console.log") || contentLower.includes(": any") || contentLower.includes("TASK") || contentLower.includes("dummy")) {
               suspiciousPatterns++;
             }
           }

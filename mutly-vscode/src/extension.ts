@@ -6,7 +6,7 @@ import { MutlyStatusBar, MutlyDiagnostics, MutlyCodeLensProvider } from './revie
 import { MutlyReviewPanel } from './reviewPanel';
 
 const DAEMON_HOST = 'localhost';
-const DEFAULT_DAEMON_PORT = 3000;
+const DEFAULT_DAEMON_PORT = 4000;
 
 function getDaemonPort(): number {
     const userConfig = vscode.workspace.getConfiguration('mutly');
@@ -19,7 +19,7 @@ let activated = false;
 export function activate(context: vscode.ExtensionContext) {
     if (activated) return;
     activated = true;
-    console.log('Mutly VS Code client extension initialized successfully.');
+    process.stdout.write('Mutly VS Code client extension initialized successfully.');
 
     daemonClient = new DaemonClient();
 

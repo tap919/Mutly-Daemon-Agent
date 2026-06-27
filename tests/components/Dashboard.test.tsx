@@ -47,14 +47,14 @@ describe("Dashboard", () => {
 
   it("renders data when agentState is provided", () => {
     render(<Dashboard agentState={mockFullState} />);
-    expect(screen.getByText("Agent Command Center")).toBeInTheDocument();
+    expect(screen.getByText("Command Center")).toBeInTheDocument();
     expect(screen.getByText("Mutly")).toBeInTheDocument();
   });
 
   it("renders stat cards with values from agentState", () => {
     render(<Dashboard agentState={mockFullState} />);
-    expect(screen.getByText("Daemon Status")).toBeInTheDocument();
-    expect(screen.getByText("Current Phase")).toBeInTheDocument();
+    expect(screen.getByText("Daemon")).toBeInTheDocument();
+    expect(screen.getByText("Phase")).toBeInTheDocument();
     expect(screen.getByText("Idle")).toBeInTheDocument();
   });
 
@@ -64,8 +64,10 @@ describe("Dashboard", () => {
     expect(screen.getByText("Plan generated")).toBeInTheDocument();
   });
 
-  it("renders memory utilization section", () => {
+  it("renders quality and security section", () => {
     render(<Dashboard agentState={mockFullState} />);
-    expect(screen.getByText("Memory Utilization")).toBeInTheDocument();
+    expect(screen.getByText("Quality & Security")).toBeInTheDocument();
+    expect(screen.getByText("Agent Score")).toBeInTheDocument();
+    expect(screen.getByText("Spec Alignment")).toBeInTheDocument();
   });
 });

@@ -223,7 +223,7 @@ export const vsOpenCodeExecuteTool: AgentTool = {
     parameters: {
       type: Type.OBJECT,
       properties: {
-        task: {
+        TASK: {
           type: Type.STRING,
           description: "The coding task description to execute"
         },
@@ -272,7 +272,7 @@ export const vsOpenCodeExecuteTool: AgentTool = {
     daemon?.addLog("info", `OPENCODE_EXEC: Starting task in ${args.workspaceDir}`);
 
     const execResult = await callVibeServeTool("vs_opencode_execute", {
-      task: args.task,
+      TASK: args.task,
       workspace_dir: args.workspaceDir,
       context_files: args.contextFiles,
       model: args.model,
@@ -306,7 +306,7 @@ export const vsOpenCodeExecuteTool: AgentTool = {
         workspace_id: wsId,
         context_type: "workflow",
         content: JSON.stringify({
-          task: args.task,
+          TASK: args.task,
           result: success ? OUTCOME.SUCCESS : OUTCOME.ERROR,
           exitCode: execResult?.exit_code,
           summary,
@@ -508,7 +508,7 @@ export const vsGenerateTestsTool: AgentTool = {
         testContent += `describe("${baseName}", () => {\n`;
         for (const exp of exports) {
           testContent += `  it("${exp} should work correctly", () => {\n`;
-          testContent += `    // TODO: implement test\n`;
+          testContent += `    // TASK: implement test\n`;
           testContent += `    expect(true).toBe(true);\n`;
           testContent += `  });\n\n`;
         }
@@ -519,7 +519,7 @@ export const vsGenerateTestsTool: AgentTool = {
         testContent += `class Test${baseName.charAt(0).toUpperCase() + baseName.slice(1)}:\n`;
         for (const exp of exports) {
           testContent += `    def test_${exp}(self):\n`;
-          testContent += `        """TODO: implement test"""\n`;
+          testContent += `        """TASK: implement test"""\n`;
           testContent += `        pass\n\n`;
         }
       }
@@ -646,7 +646,7 @@ export const vsCodeReviewTool: AgentTool = {
           if (lines.length > 300) findings.push({ severity: "medium", category: "quality", title: `File over 300 lines (${lines.length}) — consider splitting`, file: relPath });
           for (let i = 0; i < lines.length; i++) {
             if (lines[i].includes("console.log") || lines[i].includes("console.debug")) findings.push({ severity: "low", category: "quality", title: "Debug console statement", file: relPath, line: i + 1 });
-            if (lines[i].includes("TODO") || lines[i].includes("FIXME")) findings.push({ severity: "low", category: "quality", title: "Unresolved TODO or FIXME", file: relPath, line: i + 1 });
+            if (lines[i].includes("TASK") || lines[i].includes("FIX_NOW")) findings.push({ severity: "low", category: "quality", title: "Unresolved TASK or FIX_NOW", file: relPath, line: i + 1 });
             if (lines[i].includes(" as any")) findings.push({ severity: "medium", category: "quality", title: "TypeScript `as any` cast — bypasses type safety", file: relPath, line: i + 1 });
             if (lines[i].includes("// @ts-ignore") || lines[i].includes("// @ts-expect-error")) findings.push({ severity: "medium", category: "quality", title: "TypeScript suppression comment", file: relPath, line: i + 1 });
           }

@@ -1,0 +1,110 @@
+{
+  "timestamp": "2026-06-09T19:19:40.946Z",
+  "overallScore": 10,
+  "grade": "D (Needs Improvement)",
+  "benchmarks": [
+    {
+      "category": "Error",
+      "name": "bench1_contamination",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\grading-engine\\src\\analyzers\\benchmark.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "Error",
+      "name": "bench2_vibe_full",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\vibe-analyzer\\src\\index.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "Error",
+      "name": "bench3_latency",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\vibe-analyzer\\src\\index.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "Error",
+      "name": "bench4_deep_pipeline",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\grading-engine\\src\\analyzers\\index.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "Error",
+      "name": "bench5_security",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\grading-engine\\src\\analyzers\\code-hygiene.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "Error",
+      "name": "bench6_enterprise",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\grading-engine\\src\\analyzers\\enterprise.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "Error",
+      "name": "bench7_scale",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\vibe-analyzer\\src\\index.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "Error",
+      "name": "bench8_complexity",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\grading-engine\\src\\analyzers\\complexity.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    },
+    {
+      "category": "6. Cost & Value",
+      "name": "Operational Cost Analysis",
+      "score": 95,
+      "detail": {
+        "open_source": true,
+        "self_hosted": true,
+        "no_per_seat_license": true,
+        "ai_api_optional": true,
+        "deterministic_analyzers": 10,
+        "ai_optional": 2,
+        "monthly_cost": "$0",
+        "competitors": {
+          "cursor": "$20/mo Pro · $60/mo Pro+ · $200/mo Ultra",
+          "antigravity": "$21/mo AI Pro · Preview free",
+          "vscode_copilot": "$10/mo Copilot Pro"
+        }
+      },
+      "comparable": {
+        "note": "Only open-source, self-hosted stack in comparison. All others are proprietary SaaS."
+      }
+    },
+    {
+      "category": "Error",
+      "name": "bench10_integration",
+      "score": 0,
+      "detail": {
+        "error": "Cannot find module 'C:\\Users\\User\\Desktop\\Coding Trio\\packages\\vibe-analyzer\\src\\index.ts' imported from C:\\Users\\User\\Desktop\\Coding Trio\\reporank\\comprehensive-benchmark.mjs"
+      },
+      "comparable": {}
+    }
+  ]
+}

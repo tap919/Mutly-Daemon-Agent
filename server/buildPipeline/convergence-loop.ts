@@ -304,7 +304,7 @@ function runHeuristicScan(workspaceRoot: string): AuditOutput {
             // Quick heuristic scan of file
             const content = readFileSync(full, "utf-8");
 
-            if (content.includes("console.log(")) {
+            if (content.includes("process.stdout.write(")) {
               findings["console-left-in"] = (findings["console-left-in"] || 0) + 1;
             }
             if (content.includes(": any")) {

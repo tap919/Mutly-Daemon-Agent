@@ -8,7 +8,7 @@ export default defineConfig({
   reporter: [["html"], ["list"]],
   timeout: 60000,
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: "http://localhost:4000",
     trace: "on",
     screenshot: "on",
     video: "on",
@@ -21,7 +21,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "npx tsx server.ts",
-    url: "http://localhost:3000/health",
+    url: "http://localhost:4000/health",
     reuseExistingServer: true,
     timeout: 120 * 1000,
     cwd: ".",

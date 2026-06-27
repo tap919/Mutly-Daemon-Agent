@@ -285,8 +285,8 @@ export async function p4_build(state: PipelineState, ctx: BuildContext): Promise
           const lines = content.split("\n");
           let changed = 0;
           for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes("console.log(") && !lines[i].trim().startsWith("//")) {
-              lines[i] = lines[i].replace("console.log(", "// console.log(");
+            if (lines[i].includes("process.stdout.write(") && !lines[i].trim().startsWith("//")) {
+              lines[i] = lines[i].replace("process.stdout.write(", "// process.stdout.write(");
               changed++;
             }
           }

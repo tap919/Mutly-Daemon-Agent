@@ -27,7 +27,7 @@ export interface SweBenchTask {
   pass_to_pass: string[];
   difficulty?: string;
   test_code?: string;
-  /** For local tasks: what file to write the generated code to */
+  /** For local TASKS: what file to write the generated code to */
   target_file?: string;
   /** Additional files (e.g. test helpers, setup) */
   support_files?: Record<string, string>;
@@ -63,15 +63,15 @@ class SweBenchHarness {
   }
 
   async run(
-    tasks: SweBenchTask[],
+    TASKS: SweBenchTask[],
     opts: { maxTasks?: number; timeoutPerTask?: number; model?: string }
   ): Promise<{ results: SweBenchResult[]; summary: SweBenchSummary }> {
-    const maxTasks = Math.min(opts.maxTasks ?? tasks.length, tasks.length);
+    const maxTasks = Math.min(opts.maxTasks ?? TASKS.length, TASKS.length);
     const timeoutPerTask = opts.timeoutPerTask ?? 120_000;
     const model = opts.model ?? getConfig().MUTLY_DEFAULT_MODEL ?? "gemini-2.5-flash";
-    const selected = tasks.slice(0, maxTasks);
+    const selected = TASKS.slice(0, maxTasks);
 
-    logger.info(`[swe-bench] Running ${selected.length} tasks with model ${model}`);
+    logger.info(`[swe-bench] Running ${selected.length} TASKS with model ${model}`);
     const results: SweBenchResult[] = [];
 
     for (let i = 0; i < selected.length; i++) {
@@ -116,14 +116,14 @@ class SweBenchHarness {
   }
 
   private async runSingleTask(
-    task: SweBenchTask,
+    TASK: SweBenchTask,
     opts: { timeoutPerTask: number; model: string }
   ): Promise<SweBenchResult> {
     const start = Date.now();
     let steps = 0;
 
     // Step 1: Ingest — parse the issue and prepare context
-    const taskDesc = `## Task: ${task.instance_id}\n\n${task.issue}\n\n## Requirements\n${task.fail_to_pass.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
+    const taskDesc = `## TASK: ${TASK.instance_id}\n\n${TASK.issue}\n\n## Requirements\n${TASK.fail_to_pass.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
     steps++;
 
     // Step 2: Generate code via LLM
@@ -154,18 +154,18 @@ Rules:
     }
 
     // Step 3: Apply — write the generated code to a temp workspace
-    const workspaceDir = path.join(process.cwd(), "benchmark-results", "workspace", task.instance_id);
+    const workspaceDir = path.join(process.cwd(), "benchmark-results", "workspace", TASK.instance_id);
     fs.mkdirSync(workspaceDir, { recursive: true });
 
-    const targetFile = task.target_file || this.inferTargetFile(task);
+    const targetFile = TASK.target_file || this.inferTargetFile(TASK);
     const fullPath = path.join(workspaceDir, targetFile);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, code, "utf-8");
     steps++;
 
     // Write support files
-    if (task.support_files) {
-      for (const [relPath, content] of Object.entries(task.support_files)) {
+    if (TASK.support_files) {
+      for (const [relPath, content] of Object.entries(TASK.support_files)) {
         const sp = path.join(workspaceDir, relPath);
         fs.mkdirSync(path.dirname(sp), { recursive: true });
         fs.writeFileSync(sp, content, "utf-8");
@@ -176,24 +176,24 @@ Rules:
     let testResults: TestCaseResult[] = [];
     let passed = false;
 
-    if (task.test_code) {
+    if (TASK.test_code) {
       // Write the test file
-      const testFilePath = path.join(workspaceDir, this.getTestFileName(task));
+      const testFilePath = path.join(workspaceDir, this.getTestFileName(TASK));
       fs.mkdirSync(path.dirname(testFilePath), { recursive: true });
-      fs.writeFileSync(testFilePath, task.test_code, "utf-8");
+      fs.writeFileSync(testFilePath, TASK.test_code, "utf-8");
 
       testResults = await runTestSuite(workspaceDir, {
-        testFile: this.getTestFileName(task),
-        testNames: [...task.fail_to_pass, ...task.pass_to_pass],
+        testFile: this.getTestFileName(TASK),
+        testNames: [...TASK.fail_to_pass, ...TASK.pass_to_pass],
         timeout: opts.timeoutPerTask,
       });
       steps++;
 
-      const allRequiredPass = task.fail_to_pass.every((name) => {
+      const allRequiredPass = TASK.fail_to_pass.every((name) => {
         const r = testResults.find((t) => t.name === name);
         return r?.passed === true;
       });
-      const allStablePass = task.pass_to_pass.every((name) => {
+      const allStablePass = TASK.pass_to_pass.every((name) => {
         const r = testResults.find((t) => t.name === name);
         return r?.passed === true;
       });
@@ -201,15 +201,15 @@ Rules:
     } else {
       // No test code provided — pass by default (code was generated)
       passed = true;
-      testResults = task.fail_to_pass.map((name) => ({ name, passed: true }));
+      testResults = TASK.fail_to_pass.map((name) => ({ name, passed: true }));
     }
 
     const durationMs = Date.now() - start;
-    const totalTests = [...task.fail_to_pass, ...task.pass_to_pass].length;
+    const totalTests = [...TASK.fail_to_pass, ...TASK.pass_to_pass].length;
     const passedTests = testResults.filter((t) => t.passed).length;
 
     return {
-      instance_id: task.instance_id,
+      instance_id: TASK.instance_id,
       passed,
       resolved: passed,
       score: totalTests > 0 ? passedTests / totalTests : 1,
@@ -220,18 +220,18 @@ Rules:
     };
   }
 
-  private inferTargetFile(task: SweBenchTask): string {
-    const id = task.instance_id.toLowerCase();
+  private inferTargetFile(TASK: SweBenchTask): string {
+    const id = TASK.instance_id.toLowerCase();
     if (id.includes("counter")) return "Counter.tsx";
     if (id.includes("login")) return "LoginForm.tsx";
     if (id.includes("data-fetch") || id.includes("hook")) return "useFetchData.ts";
-    if (id.includes("todo")) return "TodoManager.tsx";
+    if (id.includes("TASK")) return "TASKManager.tsx";
     if (id.includes("middleware")) return "middleware.ts";
     return "generated.ts";
   }
 
-  private getTestFileName(task: SweBenchTask): string {
-    const target = task.target_file || this.inferTargetFile(task);
+  private getTestFileName(TASK: SweBenchTask): string {
+    const target = TASK.target_file || this.inferTargetFile(TASK);
     const base = target.replace(/\.(tsx?|jsx?)$/, "");
     return `${base}.test.ts`;
   }
@@ -240,8 +240,8 @@ Rules:
 export const sweBenchHarness = new SweBenchHarness();
 
 export async function runSweBenchEval(
-  tasks: SweBenchTask[],
+  TASKS: SweBenchTask[],
   opts: { maxTasks?: number; timeoutPerTask?: number; model?: string } = {}
 ): Promise<{ results: SweBenchResult[]; summary: SweBenchSummary }> {
-  return sweBenchHarness.run(tasks, opts);
+  return sweBenchHarness.run(TASKS, opts);
 }

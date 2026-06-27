@@ -1,16 +1,18 @@
 /** @vitest-environment jsdom */
 import '../tests/setup.dom';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import App from '../src/App';
 import LandingPage from '../src/components/LandingPage';
 import { AgentDaemon, scanWorkspace } from '../server/agentDaemon';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock fetch for integration tests
-global.fetch = vi.fn();
-
-const { mockGenerateContent } = vi.hoisted(() => {
-  return { mockGenerateContent: vi.fn() };
+// ---------------------------------------------------------------------------
+// Hoisted mocks — these must exist before any imports that trigger side-effects
+// ---------------------------------------------------------------------------
+const { mockGenerateContent, mockProviderResponse } = vi.hoisted(() => {
+  return {
+    mockGenerateContent: vi.fn(),
+    mockProviderResponse: vi.fn(),
+  };
 });
 
 vi.mock('@google/genai', () => {
@@ -20,15 +22,62 @@ vi.mock('@google/genai', () => {
         generateContent: mockGenerateContent
       }
     },
-    Type: { /* Type definition here (customize based on actual usage) */ }
+    Type: { /* Type definition stub */ }
   };
 });
+
+vi.mock('../server/execution/podmanSandbox.js', () => {
+  return {
+    PodmanSandbox: class {
+      ensureImage = vi.fn().mockResolvedValue(undefined);
+      runCommand = vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+      isPodmanAvailable = vi.fn().mockResolvedValue(false);
+    }
+  };
+});
+
+vi.mock('../server/lib/llm/createProvider.js', () => {
+  return {
+    createProvider: () => ({
+      generateContent: mockProviderResponse,
+      embedContent: vi.fn().mockResolvedValue({ embedding: { values: new Array(256).fill(0) } }),
+      name: 'mock-provider',
+    })
+  };
+});
+
+vi.mock('../server/audit/reporankAuditService.js', () => {
+  return {
+    ReporankAuditService: class {
+      auditWorkspace = vi.fn().mockResolvedValue({
+        score: 85,
+        files: 55,
+        vibe: { overall: 85, namingScore: 80, modernityScore: 75, hygieneScore: 90, configCoherence: 85, dependencyFreshness: 70, recommendations: [] },
+        secrets: { secretsFound: 0, secrets: [], recommendation: '' },
+        tree: [],
+      });
+    }
+  };
+});
+
+vi.mock('../server/lib/secretsManager.js', () => {
+  return {
+    EnvSecretManager: class {},
+  };
+});
+
+// Re-define global.fetch mock (used by mutlyFetch in frontend tests)
+global.fetch = vi.fn();
+
+// --------- App (must be imported AFTER the mocks above are registered) ---------
+import App from '../src/App';
 
 describe('Frontend Integration Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
+      text: () => Promise.resolve('{}'),
       json: () => Promise.resolve({})
     }) as any;
   });
@@ -38,18 +87,14 @@ describe('Frontend Integration Tests', () => {
     expect(screen.getByText('MUTLY DAEMON ONLINE')).toBeInTheDocument();
   });
 
-  it('navigates from Landing Page to Dashboard', () => {
+  it('renders App sidebar with navigation elements', () => {
     render(<App />);
-    
-    // Check we are on landing
-    const enterBtn = screen.getByText(/Enter Command Center/i);
-    expect(enterBtn).toBeInTheDocument();
-
-    // Click to enter
-    fireEvent.click(enterBtn);
-
-    // Verify side bar navigation is visible
     expect(screen.getByText('Mutly')).toBeInTheDocument();
+    expect(screen.getByText('Primary')).toBeInTheDocument();
+    const pipelineElements = screen.getAllByText('Pipeline');
+    expect(pipelineElements.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(screen.getByText('Advanced')).toBeInTheDocument();
   });
 
   it('fetches agent state in App component', async () => {
@@ -78,15 +123,14 @@ describe('Frontend Integration Tests', () => {
 
     (global.fetch as any).mockResolvedValue({
       ok: true,
+      text: () => Promise.resolve('{}'),
       json: () => Promise.resolve(mockState),
     });
 
     render(<App />);
-    const enterBtn = screen.getByText(/Enter Command Center/i);
-    fireEvent.click(enterBtn);
-    
+
     await waitFor(() => {
-      expect(screen.getByText('Mutly Daemon')).toBeInTheDocument();
+      expect(screen.getByText('~/workspace')).toBeInTheDocument();
     });
   });
 
@@ -102,44 +146,40 @@ describe('Frontend Integration Tests', () => {
     };
 
     (global.fetch as any).mockResolvedValue({
-      ok: true, json: () => Promise.resolve(mockState),
+      ok: true, text: () => Promise.resolve('{}'), json: () => Promise.resolve(mockState),
     });
 
     render(<App />);
-    const enterBtn = screen.getByText(/Enter Command Center/i);
-    fireEvent.click(enterBtn);
-    
+
     await waitFor(() => {
-      expect(screen.getByText('Mutly Daemon')).toBeInTheDocument();
+      expect(screen.getByText('~/workspace')).toBeInTheDocument();
     });
 
-    // Sidebar clicking
-    fireEvent.click(screen.getByText('Source Import'));
-    expect(screen.getByText('Source Ingestion')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Advanced'));
 
-    fireEvent.click(screen.getByText('REPL Engine'));
-    expect(screen.getByText(/Terminal Idle/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText('Grep & AST'));
-    const astTabs = screen.getAllByText('Grep & AST');
-    fireEvent.click(astTabs[astTabs.length - 1]);
     await waitFor(() => {
-      expect(screen.getByText(/AST Hits/i)).toBeInTheDocument();
+      expect(screen.getByText('Source Import')).toBeInTheDocument();
     });
   });
 });
 
 describe('Backend AgentDaemon Logic Tests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProviderResponse.mockReset();
+    mockGenerateContent.mockReset();
+  });
+
   it('toggles autonomous mode', () => {
     const daemon = new AgentDaemon();
     daemon.stop();
     daemon.currentPhase = 'Idle';
 
     expect(daemon.currentPhase).toBe('Idle');
-    
+
     daemon.toggleAutonomous();
     expect(daemon.currentPhase).toBe('Autonomous Execution');
-    
+
     daemon.toggleAutonomous();
     expect(daemon.currentPhase).toBe('Idle');
   });
@@ -147,42 +187,38 @@ describe('Backend AgentDaemon Logic Tests', () => {
   it('returns valid status', () => {
     const daemon = new AgentDaemon();
     const status = daemon.getStatus();
-    
+
     expect(status.status).toBe('online');
     expect(status.daemon).toBe('Mutly');
   });
 
   it('generates a plan correctly', async () => {
-    const daemon = new AgentDaemon();
-    
-    // Mock GenAI response
-    mockGenerateContent.mockResolvedValueOnce({
-      text: JSON.stringify({ action: "Review" })
+    mockProviderResponse.mockResolvedValue({
+      text: JSON.stringify({
+        action: "Review",
+        message: "Test plan",
+        tree: [{ id: 1, step: "Review code", risk: "Low" }],
+      }),
     });
-    
-    // Bypass env check if present
-    process.env.GEMINI_API_KEY = "test";
-    
+
+    const daemon = new AgentDaemon();
     await daemon.generatePlan();
     expect(daemon.currentPlan).toBeDefined();
   });
 
   it('runs sync cycle', async () => {
-    const daemon = new AgentDaemon();
-
-    mockGenerateContent.mockResolvedValueOnce({
-      text: 'Dream complete'
+    mockProviderResponse.mockResolvedValue({
+      text: 'Dream complete',
     });
 
-    process.env.GEMINI_API_KEY = "test";
-
+    const daemon = new AgentDaemon();
     await daemon.autoDream();
     expect(daemon.logs.some(log => log.msg.includes('Token Compaction complete'))).toBe(true);
   });
 
   it('starts and stops daemon interval cleanly', () => {
     const daemon = new AgentDaemon();
-    
+
     daemon.start();
     expect((daemon as any).interval).toBeDefined();
 
@@ -191,9 +227,11 @@ describe('Backend AgentDaemon Logic Tests', () => {
   });
 
   it('analyzes repository with correct AST file count calculations', async () => {
+    mockProviderResponse.mockResolvedValue({
+      text: 'Dream complete',
+    });
+
     const daemon = new AgentDaemon();
-    
-    // Test with local type
     const result = await daemon.analyzeRepository('local', {});
     expect(result.fileCount).toBeGreaterThan(0);
     expect(result.loc).toBeGreaterThan(0);
@@ -228,8 +266,11 @@ describe('Backend AgentDaemon Logic Tests', () => {
   });
 
   it('calculates complex overloads and compaction metrics based on actual scanWorkspace values', async () => {
+    mockProviderResponse.mockResolvedValue({
+      text: 'Dream complete',
+    });
+
     const daemon = new AgentDaemon();
-    
     const analysis = await daemon.analyzeRepository('local', {});
     expect(analysis.fileCount).toBeGreaterThan(0);
     expect(analysis.loc).toBeGreaterThan(0);

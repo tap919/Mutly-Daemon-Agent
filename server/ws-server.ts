@@ -10,6 +10,7 @@ export const pipelineState = new Map<string, { status: string; spec?: string; st
 export const clients = new Map<string, Set<WebSocketLike>>();
 const MAX_CLIENTS_PER_SESSION = 5;
 const activePlanLoops = new Map<string, number>();
+const sessionSeq = new Map<string, number>();
 
 type WebSocketLike = {
   send: (data: string) => void;
@@ -17,6 +18,24 @@ type WebSocketLike = {
   readyState: number;
   on: (event: string, handler: (...args: unknown[]) => void) => void;
 };
+
+type WsEnvelope = {
+  seq?: number;
+  correlationId?: string;
+  payload?: unknown;
+  type?: string;
+};
+
+function sendEnveloped(ws: WebSocketLike, sessionId: string, correlationId: string | undefined, payload: Record<string, unknown>) {
+  const current = sessionSeq.get(sessionId) ?? 0;
+  sessionSeq.set(sessionId, current + 1);
+  const envelope = {
+    seq: current + 1,
+    correlationId: correlationId || sessionId,
+    payload,
+  };
+  ws.send(JSON.stringify(envelope));
+}
 
 export function createWsAuthValidator(expectedKey: string) {
   return (req: { headers: Record<string, string | string[] | undefined> }): boolean => {
@@ -64,8 +83,13 @@ export function handleWebSocketConnection(
 
   ws.on("message", (messageStr: unknown) => {
     void (async () => {
+      // Fallback reply (used before parsing succeeds or if parsing fails)
+      let reply = (data: Record<string, unknown>) => ws.send(JSON.stringify(data));
       try {
-        const data = JSON.parse(String(messageStr)) as {
+        const envelope = JSON.parse(String(messageStr)) as WsEnvelope;
+        const correlationId = envelope.correlationId;
+        const inSeq = envelope.seq;
+        const payload = (envelope.payload ?? envelope) as {
           type: string;
           tool?: string;
           args?: Record<string, unknown>;
@@ -74,12 +98,15 @@ export function handleWebSocketConnection(
           prompt?: string;
           model?: string;
         };
-        const { type, tool, args, sid, spec, prompt, model } = data;
+        const { type, tool, args, sid, spec, prompt, model } = payload;
+        logger.info({ sessionId, inSeq, correlationId, type }, "[WS] Received message");
+
+        reply = (data: Record<string, unknown>) => sendEnveloped(ws, sessionId, correlationId, data);
 
         switch (type) {
           case "generate:stream": {
             if (!prompt) {
-              ws.send(JSON.stringify({ type: "generate:error", error: "prompt required" }));
+              reply({ type: "generate:error", error: "prompt required" });
               return;
             }
             let fullText = "";
@@ -87,42 +114,36 @@ export function handleWebSocketConnection(
               for await (const token of generateStream(prompt, { model })) {
                 fullText += token;
                 if (ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: "generate:token", token, full: fullText }));
+                  reply({ type: "generate:token", token, full: fullText });
                 }
               }
-              ws.send(JSON.stringify({ type: "generate:done", text: fullText }));
+              reply({ type: "generate:done", text: fullText });
             } catch (err) {
-              ws.send(JSON.stringify({ type: "generate:error", error: (err as Error).message }));
+              reply({ type: "generate:error", error: (err as Error).message });
             }
             break;
           }
           case "mcp_call": {
             if (!tool) {
-              ws.send(JSON.stringify({ type: "error", message: "tool required" }));
+              reply({ type: "error", message: "tool required" });
               return;
             }
             if (!isVibeServeEnabled()) {
-              ws.send(
-                JSON.stringify({
-                  type: "error",
-                  tool,
-                  message: "VibeServe MCP disabled",
-                })
-              );
+              reply({ type: "error", tool, message: "VibeServe MCP disabled" });
               return;
             }
             const result = await callVibeServeTool(tool, args ?? {});
-            ws.send(JSON.stringify({ type: "mcp_result", tool, result }));
+            reply({ type: "mcp_result", tool, result });
             break;
           }
 
           case "plan:start": {
-            const desc = typeof data.args?.description === "string" ? data.args.description : "";
-            const maxSteps = typeof data.args?.maxSteps === "number" ? data.args.maxSteps : 20;
-            const maxCost = typeof data.args?.maxCost === "number" ? data.args.maxCost : 10;
+            const desc = typeof payload.args?.description === "string" ? payload.args.description : "";
+            const maxSteps = typeof payload.args?.maxSteps === "number" ? payload.args.maxSteps : 20;
+            const maxCost = typeof payload.args?.maxCost === "number" ? payload.args.maxCost : 10;
 
             if (!desc) {
-              ws.send(JSON.stringify({ type: "plan:error", message: "description required" }));
+              reply({ type: "plan:error", message: "description required" });
               return;
             }
 
@@ -130,66 +151,58 @@ export function handleWebSocketConnection(
               maxSteps,
               maxCost,
               onStep: (step, index, total) => {
-                ws.send(
-                  JSON.stringify({
-                    type: "plan:step",
-                    step: {
-                      id: step.id,
-                      description: step.description,
-                      status: step.status,
-                      attempt: step.attempt,
-                      durationMs: step.durationMs,
-                    },
-                    index,
-                    total,
-                  })
-                );
+                reply({
+                  type: "plan:step",
+                  step: {
+                    id: step.id,
+                    description: step.description,
+                    status: step.status,
+                    attempt: step.attempt,
+                    durationMs: step.durationMs,
+                  },
+                  index,
+                  total,
+                });
               },
               onComplete: (state: PlanLoopState) => {
-                ws.send(
-                  JSON.stringify({
-                    type: "plan:complete",
-                    planId: state.loopId,
-                    status: state.status,
-                    stepsTotal: state.totalSteps,
-                    stepsPassed: state.steps.filter((s) => s.status === "passed").length,
-                    tokenUsage: state.tokenUsage,
-                    error: state.error,
-                  })
-                );
+                reply({
+                  type: "plan:complete",
+                  planId: state.loopId,
+                  status: state.status,
+                  stepsTotal: state.totalSteps,
+                  stepsPassed: state.steps.filter((s) => s.status === "passed").length,
+                  tokenUsage: state.tokenUsage,
+                  error: state.error,
+                });
               },
               onError: (step, error) => {
-                ws.send(
-                  JSON.stringify({
-                    type: "plan:step",
-                    step: {
-                      id: step.id,
-                      description: step.description,
-                      status: "failed",
-                      error,
-                    },
-                  })
-                );
+                reply({
+                  type: "plan:step",
+                  step: {
+                    id: step.id,
+                    description: step.description,
+                    status: "failed",
+                    error,
+                  },
+                });
               },
             });
 
-            ws.send(
-              JSON.stringify({
-                type: "plan:started",
-                planId: loop.getState().loopId,
-              })
-            );
+            reply({
+              type: "plan:started",
+              planId: loop.getState().loopId,
+            });
 
             const activeCount = activePlanLoops.get(sessionId) ?? 0;
             if (activeCount >= 3) {
-              ws.send(JSON.stringify({ type: "plan:error", message: "Too many concurrent plan loops" }));
+              reply({ type: "plan:error", message: "Too many concurrent plan loops" });
               break;
             }
             activePlanLoops.set(sessionId, activeCount + 1);
 
             loop.run().catch((err: unknown) => {
               logger.error({ err: err instanceof Error ? err.message : String(err) }, "[WS] Plan loop error");
-              ws.send(JSON.stringify({ type: "plan:error", message: "Plan execution encountered an error" }));
+              reply({ type: "plan:error", message: "Plan execution encountered an error" });
             }).finally(() => {
               const current = activePlanLoops.get(sessionId);
               if (current !== undefined && current > 1) {
@@ -205,19 +218,19 @@ export function handleWebSocketConnection(
             const pipelineId = sid || sessionId;
             if (sid) customSids.add(sid);
             pipelineState.set(pipelineId, { status: "running", spec, steps: [], createdAt: Date.now() });
-            ws.send(JSON.stringify({ type: "pipeline_start", sandboxId: pipelineId }));
+            reply({ type: "pipeline_start", sandboxId: pipelineId });
             pipelineState.set(pipelineId, { status: "completed", spec, createdAt: Date.now() });
-            ws.send(JSON.stringify({ type: "pipeline_complete", sandboxId: pipelineId }));
+            reply({ type: "pipeline_complete", sandboxId: pipelineId });
             break;
           }
 
           default:
-            ws.send(JSON.stringify({ type: "error", message: `Unknown type: ${type}` }));
+            reply({ type: "error", message: `Unknown type: ${type}` });
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error({ err: msg }, "[WS] Message handler error");
-        ws.send(JSON.stringify({ type: "error", message: "An internal error occurred" }));
+        reply({ type: "error", message: "An internal error occurred" });
       }
     })();
   });
