@@ -1,6 +1,27 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+function assertEnv(opts: { service: string; required?: string[]; recommended?: string[] }) {
+  const missing: string[] = [];
+  for (const key of opts.required ?? []) {
+    if (!process.env[key]) missing.push(key);
+  }
+  for (const key of opts.recommended ?? []) {
+    if (!process.env[key]) console.warn(`[env] Missing recommended env var: ${key} (service: ${opts.service})`);
+  }
+  if (missing.length) {
+    console.error(`[env] Missing required env vars for ${opts.service}: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+
+// Startup env validation
+assertEnv({
+  service: "Mutly",
+  required: ["MUTLY_API_KEY"],
+  recommended: ["VIBESERVE_MCP_URL", "REPORANK_API_URL", "CLAW_PROTECT_URL"],
+});
+
 import express from "express";
 import path from "path";
 import fs from "fs";
