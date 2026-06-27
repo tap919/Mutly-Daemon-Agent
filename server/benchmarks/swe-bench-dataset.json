@@ -1,0 +1,97 @@
+{
+  "tasks": [
+    {
+      "instance_id": "mutly__counter-001",
+      "repo": "local",
+      "issue": "Create a React counter component with increment and decrement buttons. The component should use useState, display the count value prominently, have a + button that increments by 1, and a - button that decrements by 1. Use named export 'Counter'.",
+      "base_commit": "HEAD",
+      "test_patch": "",
+      "fail_to_pass": [
+        "renders initial count of 0",
+        "increments count on + click",
+        "decrements count on - click"
+      ],
+      "pass_to_pass": [],
+      "difficulty": "easy",
+      "target_file": "src/Counter.tsx",
+      "test_framework": "vitest",
+      "test_code": "import { describe, it, expect } from 'vitest';\nimport { render, screen, fireEvent } from '@testing-library/react';\nimport { Counter } from '../src/Counter';\n\ndescribe('Counter', () => {\n  it('renders initial count of 0', () => {\n    const { container } = render(Counter);\n    expect(container.textContent).toContain('0');\n  });\n\n  it('increments count on + click', async () => {\n    const { container } = render(Counter);\n    const plusButton = screen.getByText('+');\n    fireEvent.click(plusButton);\n    expect(container.textContent).toContain('1');\n  });\n\n  it('decrements count on - click', async () => {\n    const { container } = render(Counter);\n    const minusButton = screen.getByText('-');\n    fireEvent.click(minusButton);\n    expect(container.textContent).toContain('-1');\n  });\n});\n"
+    },
+    {
+      "instance_id": "mutly__login-001",
+      "repo": "local",
+      "issue": "Create a LoginForm React component with email and password inputs, a submit button, and basic validation. Use useState for form state. Show validation error messages below inputs when they are invalid. The email must be a valid email format (contains @). The password must not be empty. Use named export 'LoginForm'.",
+      "base_commit": "HEAD",
+      "test_patch": "",
+      "fail_to_pass": [
+        "renders email input",
+        "renders password input",
+        "shows error for invalid email",
+        "shows error for empty password"
+      ],
+      "pass_to_pass": [],
+      "difficulty": "easy",
+      "target_file": "src/LoginForm.tsx",
+      "test_framework": "vitest",
+      "test_code": "import { describe, it, expect } from 'vitest';\nimport { render, screen, fireEvent } from '@testing-library/react';\nimport { LoginForm } from '../src/LoginForm';\n\ndescribe('LoginForm', () => {\n  it('renders email input', () => {\n    render(LoginForm);\n    expect(screen.getByLabelText(/email/i) || screen.getByPlaceholderText(/email/i) || document.querySelector('input[type=\"email\"]')).toBeTruthy();\n  });\n\n  it('renders password input', () => {\n    render(LoginForm);\n    expect(screen.getByLabelText(/password/i) || screen.getByPlaceholderText(/password/i) || document.querySelector('input[type=\"password\"]')).toBeTruthy();\n  });\n\n  it('shows error for invalid email', async () => {\n    render(LoginForm);\n    const emailInput = screen.getByLabelText(/email/i) || screen.getByPlaceholderText(/email/i) || document.querySelector('input[type=\"email\"]');\n    const passwordInput = screen.getByLabelText(/password/i) || screen.getByPlaceholderText(/password/i) || document.querySelector('input[type=\"password\"]');\n    if (emailInput) fireEvent.change(emailInput, { target: { value: 'notanemail' } });\n    if (passwordInput) fireEvent.change(passwordInput, { target: { value: 'password123' } });\n    const submitBtn = screen.getByRole('button', { name: /submit|login|sign in/i });\n    if (submitBtn) fireEvent.click(submitBtn);\n    const errors = document.querySelectorAll('[role=\"alert\"], .error, .error-message, .validation-error');\n    const hasEmailError = Array.from(document.body.textContent || '').some(() => document.body.textContent?.toLowerCase().includes('invalid') || document.body.textContent?.toLowerCase().includes('valid email'));\n    expect(errors.length > 0 || document.body.textContent?.toLowerCase().includes('invalid') || document.body.textContent?.toLowerCase().includes('valid email')).toBe(true);\n  });\n\n  it('shows error for empty password', async () => {\n    render(LoginForm);\n    const emailInput = screen.getByLabelText(/email/i) || screen.getByPlaceholderText(/email/i) || document.querySelector('input[type=\"email\"]');\n    if (emailInput) fireEvent.change(emailInput, { target: { value: 'test@example.com' } });\n    const submitBtn = screen.getByRole('button', { name: /submit|login|sign in/i });\n    if (submitBtn) fireEvent.click(submitBtn);\n    expect(document.body.textContent?.toLowerCase().includes('password') && (document.body.textContent?.toLowerCase().includes('required') || document.body.textContent?.toLowerCase().includes('empty') || document.body.textContent?.toLowerCase().includes('cannot'))).toBe(true);\n  });\n});\n"
+    },
+    {
+      "instance_id": "mutly__data-fetch-001",
+      "repo": "local",
+      "issue": "Create a custom React hook 'useFetchData' that fetches data from a URL. Return { data, loading, error, refetch }. Initially loading=true, data=null, error=null. On successful fetch, set data and loading=false. On error, set error and loading=false. Call refetch() to re-trigger the fetch. Cleanup should abort fetch on unmount. Use named export 'useFetchData'.",
+      "base_commit": "HEAD",
+      "test_patch": "",
+      "fail_to_pass": [
+        "returns loading initially",
+        "returns data after fetch",
+        "returns error on failure",
+        "supports refetch",
+        "cleans up on unmount"
+      ],
+      "pass_to_pass": [],
+      "difficulty": "medium",
+      "target_file": "src/useFetchData.ts",
+      "test_framework": "vitest",
+      "test_code": "import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';\nimport { renderHook, waitFor, act } from '@testing-library/react';\nimport { useFetchData } from '../src/useFetchData';\n\ndescribe('useFetchData', () => {\n  beforeEach(() => {\n    vi.restoreAllMocks();\n  });\n\n  it('returns loading initially', () => {\n    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));\n    const { result } = renderHook(() => useFetchData('https://example.com/api'));\n    expect(result.current.loading).toBe(true);\n    expect(result.current.data).toBeNull();\n    expect(result.current.error).toBeNull();\n  });\n\n  it('returns data after fetch', async () => {\n    const mockData = { id: 1, name: 'test' };\n    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(mockData) })));\n    const { result } = renderHook(() => useFetchData('https://example.com/api'));\n    await waitFor(() => expect(result.current.loading).toBe(false));\n    expect(result.current.data).toEqual(mockData);\n    expect(result.current.error).toBeNull();\n  });\n\n  it('returns error on failure', async () => {\n    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('Network error'))));\n    const { result } = renderHook(() => useFetchData('https://example.com/api'));\n    await waitFor(() => expect(result.current.loading).toBe(false));\n    expect(result.current.error).toBeTruthy();\n    expect(result.current.data).toBeNull();\n  });\n\n  it('supports refetch', async () => {\n    let callCount = 0;\n    vi.stubGlobal('fetch', vi.fn(() => {\n      callCount++;\n      return Promise.resolve({ ok: true, json: () => Promise.resolve({ count: callCount }) });\n    }));\n    const { result } = renderHook(() => useFetchData('https://example.com/api'));\n    await waitFor(() => expect(result.current.loading).toBe(false));\n    expect(result.current.data).toEqual({ count: 1 });\n    await act(async () => {\n      result.current.refetch();\n    });\n    await waitFor(() => expect(result.current.loading).toBe(false));\n    expect(callCount).toBe(2);\n  });\n\n  it('cleans up on unmount', async () => {\n    const abortSpy = vi.fn();\n    const originalAbortController = global.AbortController;\n    vi.stubGlobal('AbortController', vi.fn(() => ({\n      signal: {},\n      abort: abortSpy,\n    })));\n    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({}) })));\n    const { unmount } = renderHook(() => useFetchData('https://example.com/api'));\n    unmount();\n    expect(abortSpy).toHaveBeenCalled();\n    vi.stubGlobal('AbortController', originalAbortController);\n  });\n});\n"
+    },
+    {
+      "instance_id": "mutly__todo-001",
+      "repo": "local",
+      "issue": "Create a TodoManager React component for managing a todo list. It should: render an empty list initially, have an input and add button to add todos, allow toggling a todo's completed state (strikethrough), allow deleting a todo, maintain insertion order, and not allow adding empty todos. Use useState with an array of { id, text, completed } objects. Use named export 'TodoManager'.",
+      "base_commit": "HEAD",
+      "test_patch": "",
+      "fail_to_pass": [
+        "renders empty todo list initially",
+        "adds a todo item on submit",
+        "toggles todo completed state",
+        "deletes a todo item",
+        "maintains insertion order",
+        "does not allow empty todos"
+      ],
+      "pass_to_pass": [],
+      "difficulty": "medium",
+      "target_file": "src/TodoManager.tsx",
+      "test_framework": "vitest",
+      "test_code": "import { describe, it, expect } from 'vitest';\nimport { render, screen, fireEvent } from '@testing-library/react';\nimport { TodoManager } from '../src/TodoManager';\n\ndescribe('TodoManager', () => {\n  it('renders empty todo list initially', () => {\n    render(TodoManager);\n    const listItems = document.querySelectorAll('li');\n    expect(listItems.length).toBe(0);\n  });\n\n  it('adds a todo item on submit', () => {\n    render(TodoManager);\n    const input = screen.getByPlaceholderText(/add|todo|new|task/i) || document.querySelector('input[type=\"text\"]');\n    const addButton = screen.getByText(/add|\\+/i) || screen.getByRole('button', { name: /add/i });\n    if (input) fireEvent.change(input, { target: { value: 'Buy milk' } });\n    if (addButton) fireEvent.click(addButton);\n    expect(document.body.textContent).toContain('Buy milk');\n  });\n\n  it('toggles todo completed state', () => {\n    render(TodoManager);\n    const input = document.querySelector('input[type=\"text\"]');\n    const addButton = screen.getByText(/add|\\+/i) || screen.getByRole('button', { name: /add/i });\n    if (input) fireEvent.change(input, { target: { value: 'Test todo' } });\n    if (addButton) fireEvent.click(addButton);\n    const checkbox = document.querySelector('input[type=\"checkbox\"]');\n    if (checkbox) fireEvent.click(checkbox);\n    expect(checkbox?.checked).toBe(true);\n  });\n\n  it('deletes a todo item', () => {\n    render(TodoManager);\n    const input = document.querySelector('input[type=\"text\"]');\n    const addButton = screen.getByText(/add|\\+/i) || screen.getByRole('button', { name: /add/i });\n    if (input) fireEvent.change(input, { target: { value: 'Delete me' } });\n    if (addButton) fireEvent.click(addButton);\n    expect(document.body.textContent).toContain('Delete me');\n    const deleteBtn = screen.getByText(/delete|remove|x|🗑/i) || document.querySelector('[data-testid=\"delete\"]');\n    if (deleteBtn) fireEvent.click(deleteBtn);\n    expect(document.body.textContent).not.toContain('Delete me');\n  });\n\n  it('maintains insertion order', () => {\n    render(TodoManager);\n    const input = document.querySelector('input[type=\"text\"]');\n    const addButton = screen.getByText(/add|\\+/i) || screen.getByRole('button', { name: /add/i });\n    if (input) { fireEvent.change(input, { target: { value: 'First' } }); if (addButton) fireEvent.click(addButton); }\n    if (input) { fireEvent.change(input, { target: { value: 'Second' } }); if (addButton) fireEvent.click(addButton); }\n    if (input) { fireEvent.change(input, { target: { value: 'Third' } }); if (addButton) fireEvent.click(addButton); }\n    const items = document.querySelectorAll('li');\n    const texts = Array.from(items).map(el => el.textContent || '');\n    expect(texts.findIndex(t => t.includes('First'))).toBeLessThan(texts.findIndex(t => t.includes('Second')));\n  });\n\n  it('does not allow empty todos', () => {\n    render(TodoManager);\n    const addButton = screen.getByText(/add|\\+/i) || screen.getByRole('button', { name: /add/i });\n    const listItemsBefore = document.querySelectorAll('li').length;\n    if (addButton) fireEvent.click(addButton);\n    const listItemsAfter = document.querySelectorAll('li').length;\n    expect(listItemsAfter).toBe(listItemsBefore);\n  });\n});\n"
+    },
+    {
+      "instance_id": "mutly__middleware-001",
+      "repo": "local",
+      "issue": "Create an Express API middleware function 'requestLogger' that: 1. Adds a unique 'X-Request-Id' header to every request (using crypto.randomUUID). 2. Logs the request method and URL when the request starts. 3. Logs the request duration (ms) when the response finishes. 4. Catches any errors thrown by downstream handlers and returns a 500 JSON response { error: 'Internal Server Error' }. 5. Passes through successful requests normally. Use named export 'requestLogger' returning a (req, res, next) function.",
+      "base_commit": "HEAD",
+      "test_patch": "",
+      "fail_to_pass": [
+        "adds request ID header",
+        "logs request method and URL",
+        "logs request duration",
+        "catches errors and returns 500",
+        "passes through successful requests"
+      ],
+      "pass_to_pass": [],
+      "difficulty": "medium",
+      "target_file": "src/requestLogger.ts",
+      "test_framework": "node",
+      "test_code": "import { requestLogger } from '../src/requestLogger';\n\nconst tests: { name: string; fn: () => Promise<boolean> }[] = [];\n\nfunction test(name: string, fn: () => Promise<boolean>) {\n  tests.push({ name, fn });\n}\n\nlet logs: string[] = [];\nfunction resetLogs() { logs = []; }\nfunction getLogs() { return [...logs]; }\n\ntest('adds request ID header', async () => {\n  const middleware = requestLogger;\n  const req: any = { method: 'GET', url: '/test', headers: {}, on: () => {} };\n  const res: any = {\n    setHeader: (name: string, value: string) => { req.headers[name.toLowerCase()] = value; },\n    getHeader: (name: string) => req.headers[name.toLowerCase()],\n    statusCode: 200,\n    status: function(code: number) { this.statusCode = code; return this; },\n    json: function(data: any) { return data; },\n    on: () => {},\n  };\n  let nextCalled = false;\n  const next = () => { nextCalled = true; };\n  middleware(req, res, next);\n  return req.headers['x-request-id'] !== undefined;\n});\n\ntest('logs request method and URL', async () => {\n  const req: any = { method: 'POST', url: '/api/data', headers: {}, on: () => {} };\n  const res: any = {\n    setHeader: () => {},\n    statusCode: 200,\n    status: function(code: number) { this.statusCode = code; return this; },\n    json: function(data: any) { return data; },\n    on: () => {},\n  };\n  const next = () => {};\n  requestLogger(req, res, next);\n  return true;\n});\n\ntest('logs request duration', async () => {\n  const req: any = { method: 'GET', url: '/duration', headers: {}, on: () => {} };\n  let finishCallback: (() => void) | null = null;\n  const res: any = {\n    setHeader: () => {},\n    statusCode: 200,\n    status: function(code: number) { this.statusCode = code; return this; },\n    json: function(data: any) { return data; },\n    on: (event: string, cb: () => void) => { if (event === 'finish') finishCallback = cb; },\n  };\n  const next = () => {};\n  requestLogger(req, res, next);\n  return finishCallback !== null;\n});\n\ntest('catches errors and returns 500', async () => {\n  const middleware = requestLogger;\n  const req: any = { method: 'GET', url: '/error', headers: {}, on: () => {} };\n  let statusSet = 0;\n  let jsonResponse: any = null;\n  const res: any = {\n    setHeader: () => {},\n    status: function(code: number) { statusSet = code; return this; },\n    json: function(data: any) { jsonResponse = data; return data; },\n    on: () => {},\n  };\n  const next = (err?: any) => { throw err || new Error('test error'); };\n  try {\n    middleware(req, res, next);\n  } catch (e) {\n    if (statusSet === 500 && jsonResponse && (jsonResponse as any).error === 'Internal Server Error') {\n      return true;\n    }\n  }\n  return statusSet === 500;\n});\n\ntest('passes through successful requests', async () => {\n  const req: any = { method: 'GET', url: '/ok', headers: {}, on: () => {} };\n  let nextCalled = false;\n  const res: any = {\n    setHeader: () => {},\n    statusCode: 200,\n    status: function(code: number) { this.statusCode = code; return this; },\n    json: function(data: any) { return data; },\n    on: () => {},\n  };\n  const next = () => { nextCalled = true; };\n  requestLogger(req, res, next);\n  return nextCalled === true;\n});\n\n(async () => {\n  let passed = 0;\n  let failed = 0;\n  for (const t of tests) {\n    try {\n      const ok = await t.fn();\n      if (ok) {\n        console.log(`PASS: ${t.name}`);\n        passed++;\n      } else {\n        console.log(`FAIL: ${t.name}`);\n        failed++;\n      }\n    } catch (e: any) {\n      console.log(`FAIL: ${t.name} — ${e.message}`);\n      failed++;\n    }\n  }\n  console.log(`\\n${passed}/${tests.length} passed`);\n  process.exit(failed > 0 ? 1 : 0);\n})();\n"
+    }
+  ]
+}

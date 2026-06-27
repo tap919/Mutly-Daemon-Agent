@@ -1,0 +1,140 @@
+name: CI
+
+permissions:
+  contents: read
+  actions: read
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  NODE_VERSION: "24"
+  PNPM_VERSION: "10"
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: TypeScript check
+        run: pnpm typecheck
+
+      - name: Run unit + integration tests
+        run: pnpm test
+        env:
+          ENABLE_VIBESERVE_MCP: "false"
+          ENABLE_ADAPTIVE_ROUTING: "false"
+          LOG_LEVEL: "silent"
+
+      - name: Pipeline security tests
+        run: pnpm vitest run tests/pipeline-security/
+
+      - name: Build production bundle
+        run: pnpm build
+
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: coverage/
+          fail_ci_if_error: false
+
+  lint-and-secrets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: pnpm audit
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Secretlint scan
+        run: pnpm secretlint
+
+  vibeserve-e2e:
+    runs-on: ubuntu-latest
+    needs: typecheck-and-test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Vibeserve
+        working-directory: ../VibeServe-main
+        run: pip install -e ".[dev]"
+
+      - name: Start Vibeserve server
+        working-directory: ../VibeServe-main
+        run: |
+          python -m vibeserve &
+          sleep 3
+          python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read())"
+
+      - name: Run Vibeserve integration tests
+        run: pnpm test:vibeserve
+        env:
+          VIBESERVE_API_SECRET: ci-test-secret
+          DEEPSEEK_API_KEY: ""
+          OPENROUTER_API_KEY: ""
+          DEFAULT_LLM_PROVIDER: "local"
+
+      - name: Run E2E tests
+        run: pnpm test:integration
+        env:
+          ENABLE_VIBESERVE_MCP: "true"
+          VIBESERVE_MCP_URL: "http://localhost:8000"
+          VIBESERVE_API_KEY: ""
+          LOG_LEVEL: "silent"

@@ -1,25 +1,69 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
+import * as path from 'path';
+import { DaemonClient } from './daemonClient';
+import { MutlyStatusBar, MutlyDiagnostics, MutlyCodeLensProvider } from './reviewProviders';
+import { MutlyReviewPanel } from './reviewPanel';
 
-const DAEMON_PORT = 7432;
 const DAEMON_HOST = 'localhost';
+const DEFAULT_DAEMON_PORT = 4000;
+
+function getDaemonPort(): number {
+    const userConfig = vscode.workspace.getConfiguration('mutly');
+    return userConfig.get<number>('daemonPort') ?? DEFAULT_DAEMON_PORT;
+}
+
+let daemonClient: DaemonClient;
+let activated = false;
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Mutly VS Code client extension initialized successfully.');
+    if (activated) return;
+    activated = true;
+    process.stdout.write('Mutly VS Code client extension initialized successfully.');
 
-    // Helper to get configuration API key or environment fallback
+    daemonClient = new DaemonClient();
+
     function getApiKey(): string {
         const userConfig = vscode.workspace.getConfiguration('mutly');
-        return userConfig.get<string>('apiKey') || process.env.MUTLY_API_KEY || '';
+        return userConfig.get<string>('apiKey') || '';
     }
 
-    // 1. Register Status check command
+    // ── Status Bar ──────────────────────────────────────────────────
+    const statusBar = new MutlyStatusBar(daemonClient);
+    context.subscriptions.push(statusBar);
+
+    // ── Diagnostics ─────────────────────────────────────────────────
+    const diagnostics = new MutlyDiagnostics(daemonClient);
+    context.subscriptions.push(diagnostics);
+
+    // ── CodeLens ────────────────────────────────────────────────────
+    const codeLensProvider = new MutlyCodeLensProvider(daemonClient);
+    const codeLensDisposable = vscode.languages.registerCodeLensProvider(
+        { scheme: 'file' },
+        codeLensProvider
+    );
+    context.subscriptions.push(codeLensDisposable);
+
+    // ── Sidebar Webview ─────────────────────────────────────────────
+    const reviewPanelProvider = new MutlyReviewPanel(context.extensionUri, daemonClient);
+    const webviewDisposable = vscode.window.registerWebviewViewProvider(
+        MutlyReviewPanel.viewType,
+        reviewPanelProvider
+    );
+    context.subscriptions.push(webviewDisposable);
+    context.subscriptions.push(reviewPanelProvider);
+
+    // ── Start daemon connection polling ─────────────────────────────
+    daemonClient.startPolling();
+
+    // ── Commands ────────────────────────────────────────────────────
+    // 1. Status check
     const statusCmd = vscode.commands.registerCommand('mutly.status', () => {
         checkDaemonStatus();
     });
     context.subscriptions.push(statusCmd);
 
-    // 2. Register Interactive API Key config command
+    // 2. Set API Key
     const setApiKeyCmd = vscode.commands.registerCommand('mutly.setApiKey', async () => {
         const key = await vscode.window.showInputBox({
             prompt: 'Enter your Mutly Secure API Key to authorize VS Code client requests',
@@ -28,12 +72,31 @@ export function activate(context: vscode.ExtensionContext) {
         });
         if (typeof key === 'string') {
             await vscode.workspace.getConfiguration('mutly').update('apiKey', key.trim(), vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage('🔑 Mutly: Secure API key successfully updated in settings.');
+            vscode.window.showInformationMessage('Mutly: Secure API key successfully updated in settings.');
+            daemonClient.checkConnection();
         }
     });
     context.subscriptions.push(setApiKeyCmd);
 
-    // 3. Register Apply Workspace patch command
+    // 3. Run Review
+    const runReviewCmd = vscode.commands.registerCommand('mutly.runReview', async () => {
+        vscode.window.showInformationMessage('Mutly: Running RepoRank review...');
+        const result = await daemonClient.runReview();
+        if (result) {
+            vscode.window.showInformationMessage(`Mutly: Review complete. Score: ${result.score}/100 (${result.files} files analyzed)`);
+        } else {
+            vscode.window.showErrorMessage('Mutly: Review failed. Check daemon connection and API key.');
+        }
+    });
+    context.subscriptions.push(runReviewCmd);
+
+    // 4. Show Dashboard
+    const showDashboardCmd = vscode.commands.registerCommand('mutly.showDashboard', () => {
+        vscode.commands.executeCommand('workbench.view.extension.mutly-sidebar');
+    });
+    context.subscriptions.push(showDashboardCmd);
+
+    // 5. Apply Workspace patch
     const applyDiffCmd = vscode.commands.registerCommand('mutly.applyDiff', async (args: any) => {
         let filePath = '';
         let findContent = '';
@@ -48,59 +111,64 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         if (!filePath) {
-            vscode.window.showErrorMessage('❌ Mutly: No target file was specified for applying patch.');
+            vscode.window.showErrorMessage('Mutly: No target file was specified for applying patch.');
             return;
         }
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
-            vscode.window.showErrorMessage('❌ Mutly: Open a workspace folder first to apply dynamic modifications.');
+            vscode.window.showErrorMessage('Mutly: Open a workspace folder first to apply dynamic modifications.');
             return;
         }
 
         const uri = vscode.Uri.joinPath(workspaceFolders[0].uri, filePath);
-        
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        if (!uri.fsPath.startsWith(workspaceRoot + path.sep) && uri.fsPath !== workspaceRoot) {
+            vscode.window.showErrorMessage('Mutly: Path traversal blocked.');
+            return;
+        }
+
         try {
             const document = await vscode.workspace.openTextDocument(uri);
             const text = document.getText();
-            
+
             if (!text.includes(findContent)) {
-                vscode.window.showErrorMessage(`❌ Mutly: Original matching block not found in "${filePath}". Verification failed, patch was not applied.`);
+                vscode.window.showErrorMessage(`Mutly: Original matching block not found in "${filePath}". Verification failed, patch was not applied.`);
                 return;
             }
 
-            // Normal replace all matches
-            const updatedText = text.split(findContent).join(replaceContent);
+            const idx = text.indexOf(findContent);
+            const updatedText = text.slice(0, idx) + replaceContent + text.slice(idx + findContent.length);
             const edit = new vscode.WorkspaceEdit();
             const fullRange = new vscode.Range(
                 document.positionAt(0),
                 document.positionAt(text.length)
             );
             edit.replace(uri, fullRange, updatedText);
-            
+
             const success = await vscode.workspace.applyEdit(edit);
             if (success) {
                 await document.save();
-                vscode.window.showInformationMessage(`✅ Mutly: Code draft applied beautifully to "${filePath}"!`);
+                vscode.window.showInformationMessage(`Mutly: Code draft applied beautifully to "${filePath}"!`);
             } else {
-                vscode.window.showErrorMessage(`❌ Mutly: VS Code workspace refused to apply edit.`);
+                vscode.window.showErrorMessage(`Mutly: VS Code workspace refused to apply edit.`);
             }
-        } catch (err: any) {
-            vscode.window.showErrorMessage(`❌ Mutly Failed to apply edit: ${err.message}`);
+        } catch (err: unknown) {
+            vscode.window.showErrorMessage('Mutly Failed to apply edit. Please try again.');
         }
     });
     context.subscriptions.push(applyDiffCmd);
 
-    // 4. Register Chat Participant for @mutly inside the VS Code Copilot sidebar panel
+    // 6. Chat Participant for @mutly
     const handler: vscode.ChatRequestHandler = async (
         request: vscode.ChatRequest,
-        context: vscode.ChatContext,
+        ctx: vscode.ChatContext,
         response: vscode.ChatResponseStream,
         token: vscode.CancellationToken
     ) => {
         const apiKey = getApiKey();
         if (!apiKey) {
-            response.markdown('⚠️ **Mutly API Key not configured.**\n\nTo talk to your background daemon, you must provide your secure API key.\n\n[Configure API Key](command:mutly.setApiKey)');
+            response.markdown('\u26a0\ufe0f **Mutly API Key not configured.**\n\nTo talk to your background daemon, you must provide your secure API key.\n\n[Configure API Key](command:mutly.setApiKey)');
             return;
         }
 
@@ -110,29 +178,29 @@ export function activate(context: vscode.ExtensionContext) {
             const reply = await queryDaemonSession(request.prompt, apiKey);
             response.markdown(reply.response || 'No reply computed by transport.');
 
-            // Extract live conflict markers manually to display actionable click-to-apply links
             const diffInfo = parseDiffFromText(reply.response);
             if (diffInfo) {
                 const pFilePath = diffInfo.filePath;
                 const pFind = diffInfo.findContent;
                 const pReplace = diffInfo.replaceContent;
-                
-                response.markdown(`\n\n✨ **Actionable Code Draft detected for \`${pFilePath}\`:**\n\n`);
-                
-                // Form a properly JSON stringified argument list command link
+
+                response.markdown(`\n\n\u2728 **Actionable Code Draft detected for \`${pFilePath}\`:**\n\n`);
+
                 const argStr = encodeURIComponent(JSON.stringify({
                     filePath: pFilePath,
                     findContent: pFind,
                     replaceContent: pReplace
                 }));
                 const cmdUri = `command:mutly.applyDiff?${argStr}`;
-                
-                response.markdown(`👉 **[Click here to Apply dynamic patch directly to Workspace](${cmdUri})**`);
+
+                response.markdown(`\ud83d\udc49 **[Click here to Apply dynamic patch directly to Workspace](${cmdUri})**`);
             } else if (reply.hasDiff) {
-                response.markdown('\n\n✨ **Actionable Code Draft available in changes workspace. Update your client to render direct quick actions.**');
+                response.markdown('\n\n\u2728 **Actionable Code Draft available in changes workspace. Update your client to render direct quick actions.**');
             }
-        } catch (err: any) {
-            response.markdown(`\n\n❌ **Daemon Connection Failed**: ${err.message}. Make sure your local Mutly agent daemon service is started and running on http://${DAEMON_HOST}:${DAEMON_PORT}.`);
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("[Mutly] Chat handler error:", message);
+            response.markdown('\n\n\u274c **Cannot connect to daemon.** Make sure your local Mutly agent daemon service is started and running.');
         }
     };
 
@@ -144,11 +212,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 function checkDaemonStatus() {
     const userConfig = vscode.workspace.getConfiguration('mutly');
-    const apiKey = userConfig.get<string>('apiKey') || process.env.MUTLY_API_KEY || '';
+    const apiKey = userConfig.get<string>('apiKey') || '';
+    const port = getDaemonPort();
 
     const options = {
         hostname: DAEMON_HOST,
-        port: DAEMON_PORT,
+        port,
         path: '/api/agent/status',
         method: 'GET',
         headers: {
@@ -157,17 +226,18 @@ function checkDaemonStatus() {
     };
 
     const req = http.request(options, (res) => {
+        res.resume();
         if (res.statusCode === 200) {
-            vscode.window.showInformationMessage('🟢 Mutly Daemon is online on port 7432. Sandbox and reflective loops are fully functional.');
+            vscode.window.showInformationMessage(`Mutly Daemon is online on port ${port}. Sandbox and reflective loops are fully functional.`);
         } else if (res.statusCode === 401) {
-            vscode.window.showErrorMessage('🔴 Mutly Daemon returned 401 Unauthorized. Access denied or config key invalid. Use "mutly.setApiKey" command.');
+            vscode.window.showErrorMessage('Mutly Daemon returned 401 Unauthorized. Access denied or config key invalid. Use "Mutly: Set API Key" command.');
         } else {
-            vscode.window.showErrorMessage(`🔴 Mutly Daemon returned unexpected status code: ${res.statusCode}`);
+            vscode.window.showErrorMessage(`Mutly Daemon returned unexpected status code: ${res.statusCode}`);
         }
     });
 
     req.on('error', (err) => {
-        vscode.window.showErrorMessage(`🔴 Could not reach local Mutly daemon: ${err.message}. Please restart the background service.`);
+        vscode.window.showErrorMessage(`Could not reach local Mutly daemon: ${err.message}. Please restart the background service.`);
     });
     req.end();
 }
@@ -176,9 +246,10 @@ function queryDaemonSession(prompt: string, apiKey: string): Promise<{ response:
     return new Promise((resolve, reject) => {
         const postData = JSON.stringify({ query: prompt });
 
+        const port = getDaemonPort();
         const options = {
             hostname: DAEMON_HOST,
-            port: DAEMON_PORT,
+            port,
             path: '/api/agent/integrations/session',
             method: 'POST',
             headers: {
@@ -214,6 +285,21 @@ function queryDaemonSession(prompt: string, apiKey: string): Promise<{ response:
 }
 
 function parseDiffFromText(text: string) {
+    // Try parsing as JSON first (modern format)
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.filePath === "string" && typeof parsed.findContent === "string" && typeof parsed.replaceContent === "string") {
+            return {
+                filePath: parsed.filePath,
+                findContent: parsed.findContent,
+                replaceContent: parsed.replaceContent,
+            };
+        }
+    } catch {
+        // Fall through to legacy heuristic parsing
+    }
+
+    // Legacy heuristic: find <<<<<< / ======= / >>>>>>> conflict markers
     const startIdx = text.indexOf("<<<<<<<");
     const midIdx = text.indexOf("=======");
     const endIdx = text.indexOf(">>>>>>>");
@@ -247,4 +333,8 @@ function parseDiffFromText(text: string) {
     return null;
 }
 
-export function deactivate() {}
+export function deactivate() {
+    if (daemonClient) {
+        daemonClient.stopPolling();
+    }
+}

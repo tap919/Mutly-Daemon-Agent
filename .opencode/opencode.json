@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "Mutly",
+  "mcp": {
+    "vibeserve": {
+      "type": "local",
+      "command": ["python", "VibeServe-main/vibeserve/__main__.py"],
+      "enabled": true,
+      "workdir": "C:\\Users\\User\\Desktop\\Coding Trio"
+    }
+  }
+}

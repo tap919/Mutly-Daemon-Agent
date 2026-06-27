@@ -47,11 +47,11 @@ Get the daemon backend and front-end interface up and running:
 # 1. Install base project dependencies
 npm install
 
-# 2. Start the back-end daemon and Vite preview server concurrently on Port 3000
+# 2. Start the back-end daemon and Vite preview server concurrently on Port 4000
 npm run dev
 ```
 
-Your service will boot at `http://localhost:3000` (Daemon API routes live at `/api/agent/*`).
+Your service will boot at `http://localhost:4000` (Daemon API routes live at `/api/agent/*`).
 
 ---
 

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "timestamp": "2026-06-15T13:00:49.535Z",
+  "tools": {
+    "vs_memory_store": {
+      "toolName": "vs_memory_store",
+      "successCount": 200,
+      "failureCount": 1,
+      "totalLatencyMs": 3720,
+      "lastCallAt": 1781528449440,
+      "lastError": "TypeError: fetch failed"
+    },
+    "vs_memory_get": {
+      "toolName": "vs_memory_get",
+      "successCount": 178,
+      "failureCount": 0,
+      "totalLatencyMs": 5719,
+      "lastCallAt": 1781528449452
+    },
+    "vs_schema_validate": {
+      "toolName": "vs_schema_validate",
+      "successCount": 68,
+      "failureCount": 143,
+      "totalLatencyMs": 26956,
+      "lastError": "Timeout",
+      "lastCallAt": 1781528428103
+    },
+    "vs_nonexistent_tool": {
+      "toolName": "vs_nonexistent_tool",
+      "successCount": 0,
+      "failureCount": 227,
+      "totalLatencyMs": 9547,
+      "lastError": "404 {\"status\":\"error\",\"error\":\"Unknown tool vs_nonexistent_tool\"}",
+      "lastCallAt": 1781526686399
+    },
+    "vs_plan_review": {
+      "toolName": "vs_plan_review",
+      "successCount": 94,
+      "failureCount": 0,
+      "totalLatencyMs": 933,
+      "lastCallAt": 1781528447377
+    },
+    "vs_generate_artifact": {
+      "toolName": "vs_generate_artifact",
+      "successCount": 80,
+      "failureCount": 4,
+      "totalLatencyMs": 110579,
+      "lastCallAt": 1781528423456,
+      "lastError": "Timeout"
+    },
+    "vs_validate_artifact": {
+      "toolName": "vs_validate_artifact",
+      "successCount": 6,
+      "failureCount": 0,
+      "totalLatencyMs": 27,
+      "lastCallAt": 1781528428110
+    }
+  },
+  "globalReachable": true
+}

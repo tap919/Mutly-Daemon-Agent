@@ -18,11 +18,12 @@
     "strict": true,
     "paths": {
       "@/*": [
-        "./*"
+        "./src/*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["mutly-vscode"]
+  "include": ["src", "server", "tests"],
+  "exclude": ["mutly-vscode", "data/workspaces", "benchmark-results", "benchmark-results.json", "coverage", "dist", "test-results", "playwright-report"]
 }

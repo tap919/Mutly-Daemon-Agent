@@ -17,10 +17,13 @@ import {
   Flame,
   ChevronRight,
   TrendingDown,
-  Server
+  Server,
+  AlertTriangle,
 } from "lucide-react";
 import { mutlyFetch } from "../utils/api";
 import type { FullState } from "../types";
+import LoadingSkeleton from "./LoadingSkeleton";
+import ErrorBoundary from "./ErrorBoundary";
 
 interface AuditIssue {
   id: number;
@@ -36,6 +39,7 @@ export default function CodeAuditor({
 }: {
   agentState: FullState | null;
 }) {
+  if (!agentState) return <LoadingSkeleton variant="card" count={4} />;
   const [issues, setIssues] = useState<AuditIssue[]>([]);
   const [selectedId, setSelectedId] = useState<number>(1);
   const [activeCodeTab, setActiveCodeTab] = useState<"vulnerable" | "remediation">("vulnerable");
@@ -157,9 +161,10 @@ export default function CodeAuditor({
         const data = await res.json();
         // Stream logs sequentially for dramatic effect
         let index = 0;
+        const logsArray = data.logs || [data.message || "Simulation completed."];
         const interval = setInterval(() => {
-          if (index < data.logs.length) {
-            setSimLogs((prev) => [...prev, data.logs[index]]);
+          if (index < logsArray.length) {
+            setSimLogs((prev) => [...prev, logsArray[index]]);
             index++;
           } else {
             clearInterval(interval);

@@ -15,12 +15,14 @@ import {
 } from "lucide-react";
 import type { FullState } from "../types";
 import { mutlyFetch } from "../utils/api";
+import LoadingSkeleton from "./LoadingSkeleton";
 
 export default function UltraPlan({
   agentState,
 }: {
   agentState: FullState | null;
 }) {
+  if (!agentState) return <LoadingSkeleton variant="card" count={3} />;
   const [planning, setPlanning] = useState(false);
   const [executingId, setExecutingId] = useState<string | number | null>(null);
   const [executingAll, setExecutingAll] = useState(false);

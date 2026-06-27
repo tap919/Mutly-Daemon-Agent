@@ -1,5 +1,14 @@
-import { RiskLevel } from '../policy/operationClassifier.js';
-import type { PolicyDecision } from '../policy/policyEngine.js';
+﻿import { logger } from "../lib/logger.js";
+import { RiskLevel } from "../policy/operationClassifier.js";
+import type { PolicyDecision } from "../policy/policyEngine.js";
+import fs from "fs";
+import path from "path";
+import {
+  atomicWriteJson,
+  getDataPath,
+  readJsonFile,
+  withFileLock,
+} from "../lib/persistStore.js";
 
 export interface WorkflowState {
   queued: boolean;
@@ -9,6 +18,8 @@ export interface WorkflowState {
   rejected: boolean;
   failed: boolean;
   complete: boolean;
+  workflowId?: string;
+  traceId?: string;
   phase?: string;
   pendingApproval?: {
     correlationId: string;
@@ -19,28 +30,58 @@ export interface WorkflowState {
   persistedPlan?: unknown;
 }
 
-import fs from 'fs';
-import path from 'path';
+const defaultState = (): WorkflowState => ({
+  queued: false,
+  running: false,
+  pausedForApproval: false,
+  approved: false,
+  rejected: false,
+  failed: false,
+  complete: false,
+});
 
-// ... (existing imports)
+function stateFileFor(workflowId: string): string {
+  const safe = workflowId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return getDataPath(`workflow-state-${safe}.json`);
+}
 
 export class WorkflowCoordinator {
-  // ... (existing properties)
-  private stateFilePath: string;
+  private state: WorkflowState = defaultState();
+  private workflowId: string;
+  private maxFilesPerStep: number;
+  private maxCostPerWorkflow: number;
 
-  constructor(maxFilesPerStep = 10, maxCostPerWorkflow = 2, stateFilePath = './workflow-state.json') {
-    // ... (existing constructor logic)
-    this.stateFilePath = stateFilePath;
+  constructor(
+    workflowId: string,
+    maxFilesPerStep = 10,
+    maxCostPerWorkflow = 2
+  ) {
+    this.workflowId = workflowId;
+    this.maxFilesPerStep = maxFilesPerStep;
+    this.maxCostPerWorkflow = maxCostPerWorkflow;
+  }
+
+  static async loadOrCreate(workflowId: string): Promise<WorkflowCoordinator> {
+    const coord = new WorkflowCoordinator(workflowId);
+    await coord.loadState();
+    return coord;
+  }
+
+  private statePath(): string {
+    return stateFileFor(this.workflowId);
   }
 
   async saveState(): Promise<void> {
-    await fs.promises.writeFile(this.stateFilePath, this.serialize(), 'utf-8');
+    await withFileLock(this.statePath(), async () => {
+      await atomicWriteJson(this.statePath(), this.state);
+    });
   }
 
   async loadState(): Promise<void> {
-    if (fs.existsSync(this.stateFilePath)) {
-      const data = await fs.promises.readFile(this.stateFilePath, 'utf-8');
-      this.restore(data);
+    const file = this.statePath();
+    if (fs.existsSync(file)) {
+      const data = await readJsonFile<Partial<WorkflowState>>(file, {});
+      this.state = { ...defaultState(), ...data };
     }
   }
 
@@ -49,7 +90,7 @@ export class WorkflowCoordinator {
     this.state.running = false;
     this.state.complete = false;
     await this.saveState();
-    console.warn('[WorkflowCoordinator] Kill switch activated. Workflow aborted.');
+    logger.warn("[WorkflowCoordinator] Kill switch activated. Workflow aborted.");
   }
 
   async resume(): Promise<void> {
@@ -57,16 +98,9 @@ export class WorkflowCoordinator {
     this.state.pausedForApproval = false;
     await this.saveState();
   }
-  // ... (rest of the class)
 
-  setQueued(): this {
-    this.state.queued = true;
-    this.state.running = false;
-    this.state.pausedForApproval = false;
-    this.state.approved = false;
-    this.state.rejected = false;
-    this.state.failed = false;
-    this.state.complete = false;
+  setQueued(workflowId?: string, traceId?: string): this {
+    this.state = { ...defaultState(), queued: true, workflowId, traceId };
     return this;
   }
 
@@ -84,6 +118,7 @@ export class WorkflowCoordinator {
     reason?: string;
   }): this {
     this.state.pausedForApproval = true;
+    this.state.phase = "paused_for_approval";
     this.state.pendingApproval = pending;
     return this;
   }
@@ -91,6 +126,7 @@ export class WorkflowCoordinator {
   setApproved(): this {
     this.state.pausedForApproval = false;
     this.state.approved = true;
+    this.state.phase = "approved";
     this.state.pendingApproval = undefined;
     return this;
   }
@@ -98,12 +134,15 @@ export class WorkflowCoordinator {
   setRejected(): this {
     this.state.pausedForApproval = false;
     this.state.rejected = true;
+    this.state.phase = "rejected";
     this.state.pendingApproval = undefined;
     return this;
   }
 
   setFailed(): this {
     this.state.failed = true;
+    this.state.running = false;
+    this.state.phase = "failed";
     this.state.pausedForApproval = false;
     return this;
   }
@@ -111,6 +150,7 @@ export class WorkflowCoordinator {
   setComplete(): this {
     this.state.complete = true;
     this.state.running = false;
+    this.state.phase = "complete";
     return this;
   }
 
@@ -123,20 +163,40 @@ export class WorkflowCoordinator {
     return this;
   }
 
-  /** Serialize state for persistence across daemon restarts. */
+  getLimits(): { maxFilesPerStep: number; maxCostPerWorkflow: number } {
+    return {
+      maxFilesPerStep: this.maxFilesPerStep,
+      maxCostPerWorkflow: this.maxCostPerWorkflow,
+    };
+  }
+
   serialize(): string {
     return JSON.stringify(this.state);
   }
 
-  /** Restore state from a previously persisted snapshot. */
   restore(serialized: string): this {
     try {
-      const restored = JSON.parse(serialized);
-      this.state = { ...this.state, ...restored };
+      const restored = JSON.parse(serialized) as Partial<WorkflowState>;
+      this.state = { ...defaultState(), ...restored };
     } catch (err) {
-      console.error('[WorkflowCoordinator] Failed to restore state:', err);
+      logger.error("[WorkflowCoordinator] Failed to restore state: %s", String(err));
     }
     return this;
+  }
+
+  applyPolicyPause(
+    decision: PolicyDecision,
+    correlationId: string,
+    action: string
+  ): void {
+    if (decision.decision === "pause_for_approval") {
+      this.setPausedForApproval({
+        correlationId,
+        action,
+        riskLevel: decision.riskLevel,
+        reason: decision.reason,
+      });
+    }
   }
 }
 
@@ -147,36 +207,41 @@ export interface BudgetState {
   maxCost: number;
 }
 
-/**
- * Manages step-level budgets for file changes and cost limits.
- * Enforces hard ceilings on blast radius per workflow.
- */
 export class StepBudgetManager {
-  private budgets: Map<string, BudgetState>;
+  private budgets = new Map<string, BudgetState>();
 
-  constructor() {
-    this.budgets = new Map();
-  }
-
-  initializeBudget(workflowId: string, maxFiles = 10, maxCost = 2): void {
+  initializeBudget(
+    workflowId: string,
+    maxFiles = parseInt(process.env.MAX_FILES_CHANGED_PER_WORKFLOW || "25", 10),
+    maxCost = parseFloat(process.env.MAX_COST_PER_WORKFLOW_USD || "2")
+  ): void {
     this.budgets.set(workflowId, {
       remainingFiles: maxFiles,
       maxFiles,
       remainingCost: maxCost,
-      maxCost
+      maxCost,
     });
   }
 
   hasCapacity(workflowId: string, filesToChange: number, costToIncure = 0): boolean {
     const budget = this.budgets.get(workflowId);
-    if (!budget) return false;
-    return budget.remainingFiles >= filesToChange && budget.remainingCost >= costToIncure;
+    if (!budget) return true;
+    return (
+      budget.remainingFiles >= filesToChange && budget.remainingCost >= costToIncure
+    );
   }
 
-  consumeResources(workflowId: string, filesChanged: number, costIncured = 0): boolean {
+  consumeResources(
+    workflowId: string,
+    filesChanged: number,
+    costIncured = 0
+  ): boolean {
     const budget = this.budgets.get(workflowId);
-    if (!budget) return false;
-    if (budget.remainingFiles < filesChanged || budget.remainingCost < costIncured) {
+    if (!budget) return true;
+    if (
+      budget.remainingFiles < filesChanged ||
+      budget.remainingCost < costIncured
+    ) {
       return false;
     }
     budget.remainingFiles -= filesChanged;
@@ -191,5 +256,11 @@ export class StepBudgetManager {
 
   clearBudget(workflowId: string): void {
     this.budgets.delete(workflowId);
+  }
+
+  isExhausted(workflowId: string): boolean {
+    const b = this.budgets.get(workflowId);
+    if (!b) return false;
+    return b.remainingFiles <= 0 || b.remainingCost <= 0;
   }
 }

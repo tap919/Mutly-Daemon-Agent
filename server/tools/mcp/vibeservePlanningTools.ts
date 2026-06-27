@@ -1,6 +1,6 @@
 import { Type } from "@google/genai";
 import { callVibeServeTool } from "./mcpVibeServeClient.js";
-import { parseArtifact, normalizeArtifactForModel } from "../planning/artifactNormalizer.js";
+import { parseArtifact, normalizeArtifactForModel } from "../../planning/artifactNormalizer.js";
 import type { AgentTool, ToolArgs, ToolContext } from "../types.js";
 
 export const vsPlanReviewTool: AgentTool = {
@@ -20,7 +20,7 @@ export const vsPlanReviewTool: AgentTool = {
     }
   },
   async execute(args: ToolArgs, ctx: ToolContext): Promise<Record<string, unknown>> {
-    const result = await callVibeServeTool("plan_review", args, ctx.daemon);
+    const result = await callVibeServeTool("vs_plan_review", args, ctx.daemon);
     if (result.error) return result;
 
     const artifact = parseArtifact(result.data);
@@ -51,7 +51,7 @@ export const vsGenerateArtifactTool: AgentTool = {
     }
   },
   async execute(args: ToolArgs, ctx: ToolContext): Promise<Record<string, unknown>> {
-    const result = await callVibeServeTool("generate_artifact", args, ctx.daemon);
+    const result = await callVibeServeTool("vs_generate_artifact", args, ctx.daemon);
     if (result.error) return result;
 
     const artifact = parseArtifact(result.data);
@@ -82,7 +82,7 @@ export const vsValidateArtifactTool: AgentTool = {
     }
   },
   async execute(args: ToolArgs, ctx: ToolContext): Promise<Record<string, unknown>> {
-    const result = await callVibeServeTool("validate_artifact", args, ctx.daemon);
+    const result = await callVibeServeTool("vs_validate_artifact", args, ctx.daemon);
     return result;
   }
 };

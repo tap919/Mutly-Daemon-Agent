@@ -1,18 +1,33 @@
 import { useState, useEffect } from "react";
-import { FileCode, Save } from "lucide-react";
+import { FileCode, Save, AlertTriangle } from "lucide-react";
 import { mutlyFetch } from "../utils/api";
+import LoadingSkeleton from "./LoadingSkeleton";
+import EmptyState from "./EmptyState";
 
 export default function Specs() {
-  const [specContent, setSpecContent] = useState("Loading...");
-  const [claudeContent, setClaudeContent] = useState("Loading...");
+  const [specContent, setSpecContent] = useState("");
+  const [claudeContent, setClaudeContent] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
     mutlyFetch("/api/agent/context")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((d) => {
         setSpecContent(d.spec);
         setClaudeContent(d.claude);
+      })
+      .catch((err) => {
+        setError(err.message || "Failed to load context");
+      })
+      .finally(() => {
+        setLoading(false);
       });
   }, []);
 
@@ -28,6 +43,34 @@ export default function Specs() {
       setSaving(false);
     }
   };
+
+  if (loading) return <LoadingSkeleton variant="card" count={2} />;
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 space-y-4">
+        <AlertTriangle className="w-8 h-8 text-red-400" />
+        <h3 className="text-lg font-display font-semibold text-zinc-100">Failed to load context</h3>
+        <p className="text-sm text-zinc-400">{error}</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-md text-sm font-medium transition-colors border border-zinc-700"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!specContent && !claudeContent) {
+    return (
+      <EmptyState
+        icon={<FileCode className="w-8 h-8" />}
+        title="No context files found"
+        description="SPEC.md and CLAUDE.md are empty or missing."
+      />
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto h-full flex flex-col space-y-6 animate-in fade-in duration-500">

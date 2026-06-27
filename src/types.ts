@@ -36,13 +36,14 @@ export interface ExecutionPlan {
   planId: string;
   message: string;
   tree: PlanStep[];
+  groups?: PlanStep[][];
 }
 
 export interface LogEntry {
   id: string;
   time: string;
   msg: string;
-  type: "success" | "info" | "system" | "error" | "warning";
+  type: string;
 }
 
 export interface MicroChange {

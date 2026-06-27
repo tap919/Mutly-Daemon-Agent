@@ -2,20 +2,22 @@
   "name": "mutly",
   "displayName": "Mutly Copilot Core Agent",
   "description": "Mutly back-end local transport integration for VS Code Companion Chat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "mutly-ai",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.93.0"
   },
   "categories": [
     "AI",
     "Chat",
-    "Programming Language"
+    "Programming Language",
+    "Linters",
+    "Other"
   ],
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./dist/extension.js",
+  "main": "./out/extension.js",
   "contributes": {
     "chatParticipants": [
       {
@@ -31,10 +33,38 @@
         "title": "Mutly: Show Daemon Status"
       },
       {
-        "command": "mutly.sync",
-        "title": "Mutly: Ingest Workspace Context"
+        "command": "mutly.setApiKey",
+        "title": "Mutly: Set API Key"
+      },
+      {
+        "command": "mutly.runReview",
+        "title": "Mutly: Run Review",
+        "icon": "$(search)"
+      },
+      {
+        "command": "mutly.showDashboard",
+        "title": "Mutly: Show Dashboard",
+        "icon": "$(dashboard)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mutly-sidebar",
+          "title": "Mutly",
+          "icon": "$(beaker)"
+        }
+      ]
+    },
+    "views": {
+      "mutly-sidebar": [
+        {
+          "type": "webview",
+          "id": "mutly.reviewPanel",
+          "name": "RepoRank Review"
+        }
+      ]
+    },
     "configuration": {
       "title": "Mutly",
       "properties": {
@@ -42,6 +72,16 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Secure API key for accessing the local Mutly background daemon."
+        },
+        "mutly.daemonPort": {
+          "type": "number",
+          "default": 3000,
+          "markdownDescription": "Port the Mutly daemon is listening on."
+        },
+        "mutly.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show RepoRank review score as a CodeLens above each open file."
         }
       }
     }

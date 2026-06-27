@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-server
+data
+.git
+.env
+*.log
+coverage
+.husky
+.github
+.vite

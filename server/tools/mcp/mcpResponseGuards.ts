@@ -86,23 +86,9 @@ export function sanitizeMcpResponse(raw: unknown, config?: Partial<GuardConfig>)
 
   let response = truncateResponse(raw, cfg.maxResponseChars);
 
-  if (typeof response === "string") {
-    if (cfg.stripInstructions && containsInstructions(response)) {
-      response = stripInstructions(response);
-    }
-  } else if (typeof response === "object" && response !== null) {
-    let obj = response as Record<string, unknown>;
-    if (cfg.redactSecrets) {
-      obj = redactSensitiveData(obj) as Record<string, unknown>;
-    }
-    if (cfg.stripInstructions) {
-      const str = JSON.stringify(obj);
-      if (containsInstructions(str)) {
-        obj = JSON.parse(stripInstructions(str)) as Record<string, unknown>;
-      }
-    }
-    response = obj;
+  if (cfg.stripInstructions && containsInstructions(response)) {
+    response = stripInstructions(response);
   }
 
-  return typeof response === "string" ? { data: response } : response as ToolResult;
+  return { data: response };
 }

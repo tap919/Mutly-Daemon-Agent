@@ -1,0 +1,58 @@
+{
+  "features": {
+    "main_agent_enabled": true,
+    "adaptive_routing": true,
+    "autonomous_pipelines": true,
+    "human_approvals": true,
+    "autonomy_kill_switch": false
+  },
+  "agent": {
+    "mode": "auto",
+    "max_concurrent_sub_agents": 4,
+    "memory_backend": "redis",
+    "soul_file": "mutly.soul.md",
+    "heartbeat_file": "mutly.heartbeat.json",
+    "heartbeat_interval_seconds": 30
+  },
+  "integrations": {
+    "vibeserve": {
+      "enabled": true,
+      "url": "http://127.0.0.1:8000",
+      "tool_timeout_ms": 10000,
+      "max_retries": 3
+    },
+    "reporank": {
+      "enabled": true,
+      "url": "http://localhost:3001"
+    },
+    "google_ax": {
+      "enabled": false,
+      "endpoint": "",
+      "project": ""
+    }
+  },
+  "model_router": {
+    "enabled": true,
+    "default_model": "gemini-2.5-flash",
+    "fallback_model": "gemini-2.5-flash",
+    "use_litellm": true,
+    "use_opencode": false
+  },
+  "pipeline": {
+    "drift_threshold": 0.3,
+    "review_threshold": 0.4,
+    "approval_policy": {
+      "require_for": [
+        "delete_file",
+        "deploy"
+      ]
+    },
+    "default_template": "build"
+  },
+  "sub_agents": {
+    "token_budget": 8000,
+    "scope_boundary": "src/",
+    "audit_trail": true,
+    "timeout_ms": 120000
+  }
+}

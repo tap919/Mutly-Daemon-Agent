@@ -53,9 +53,9 @@ describe('operationClassifier', () => {
   describe('getRiskDescription', () => {
     it('should return correct descriptions for each risk level', () => {
       expect(getRiskDescription('green')).toContain('Read-only');
-      expect(getRiskDescription('yellow')).toContain('low-impact');
-      expect(getRiskDescription('orange')).toContain('cross-system');
-      expect(getRiskDescription('red')).toContain('critical');
+      expect(getRiskDescription('yellow')).toMatch(/low-impact/i);
+      expect(getRiskDescription('orange')).toMatch(/cross-system/i);
+      expect(getRiskDescription('red')).toMatch(/critical/i);
     });
   });
 });

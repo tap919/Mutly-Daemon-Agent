@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { FullState } from "../types";
 import { mutlyFetch } from "../utils/api";
+import LoadingSkeleton from "./LoadingSkeleton";
 
 interface SymbolItem {
   name: string;
@@ -147,7 +148,7 @@ export default function Memory({
     }
   };
 
-  if (!agentState) return null;
+  if (!agentState) return <LoadingSkeleton variant="card" count={2} />;
 
   const toggleFile = (filePath: string) => {
     setExpandedFiles((prev) => ({

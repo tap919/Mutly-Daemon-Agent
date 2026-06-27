@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "mutly-daemon": {
+      "type": "local",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "env": {
+        "MUTLY_API_KEY": "${MUTLY_API_KEY}",
+        "ENABLE_VIBESERVE_MCP": "true",
+        "VIBESERVE_MCP_URL": "http://localhost:8000",
+        "VIBESERVE_API_KEY": "${VIBESERVE_API_KEY}"
+      }
+    },
+    "vibeserve": {
+      "type": "http",
+      "url": "http://localhost:8000",
+      "headers": {}
+    }
+  }
+}

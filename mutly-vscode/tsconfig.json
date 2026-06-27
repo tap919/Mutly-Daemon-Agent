@@ -6,7 +6,8 @@
     "lib": ["es2022"],
     "sourceMap": true,
     "strict": true,
-    "rootDir": "src"
+    "rootDir": "src",
+    "skipLibCheck": true
   },
-  "exclude": ["node_modules", ".vscode-test"]
+  "exclude": ["node_modules", ".vscode-test", "../node_modules"]
 }

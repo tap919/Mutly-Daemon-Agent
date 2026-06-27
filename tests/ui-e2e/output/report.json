@@ -1,0 +1,381 @@
+{
+  "startedAt": "2026-06-05T19:15:35.452Z",
+  "durationMs": 51416,
+  "summary": {
+    "total": 25,
+    "passed": 25,
+    "failed": 0,
+    "skipped": 0
+  },
+  "sections": [
+    {
+      "name": "Landing Page",
+      "slug": "landing-page",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Load app",
+          "status": "PASS",
+          "durationMs": 2419.1348000000003,
+          "error": null,
+          "screenshot": "01-landing-page-load-app.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "Enter Command Center",
+          "status": "PASS",
+          "durationMs": 1563.4567000000002,
+          "error": null,
+          "screenshot": "02-landing-page-enter-command-center.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Source Import",
+      "slug": "source-import",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Select Folder button click",
+          "status": "PASS",
+          "durationMs": 555.8795999999993,
+          "error": null,
+          "screenshot": "03-source-import-select-folder-button-click.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        },
+        {
+          "name": "GitHub URL submit",
+          "status": "PASS",
+          "durationMs": 2285.2344000000003,
+          "error": null,
+          "screenshot": "04-source-import-github-url-submit.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "slug": "dashboard",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Status widgets render",
+          "status": "PASS",
+          "durationMs": 2.3989000000001397,
+          "error": null,
+          "screenshot": "05-dashboard-status-widgets-render.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "Live data polling active",
+          "status": "PASS",
+          "durationMs": 4512.716899999999,
+          "error": null,
+          "screenshot": "06-dashboard-live-data-polling-active.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "SPEC.md",
+      "slug": "spec-md",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Edit spec text and save",
+          "status": "PASS",
+          "durationMs": 862.8441000000003,
+          "error": null,
+          "screenshot": "07-spec-md-edit-spec-text-and-save.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "REPL Engine",
+      "slug": "repl-engine",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Generate Plan",
+          "status": "PASS",
+          "durationMs": 3043.824199999999,
+          "error": null,
+          "screenshot": "08-repl-engine-generate-plan.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "Run Step 1",
+          "status": "PASS",
+          "durationMs": 5.946700000000419,
+          "error": null,
+          "screenshot": "09-repl-engine-run-step-1.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        },
+        {
+          "name": "Run All Steps",
+          "status": "PASS",
+          "durationMs": 2.6332000000002154,
+          "error": null,
+          "screenshot": "10-repl-engine-run-all-steps.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Grep & AST",
+      "slug": "grep-ast",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Trigger embeddings index",
+          "status": "PASS",
+          "durationMs": 2.5146999999997206,
+          "error": null,
+          "screenshot": "11-grep-ast-trigger-embeddings-index.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "Search symbol by keyword",
+          "status": "PASS",
+          "durationMs": 4.483400000000984,
+          "error": null,
+          "screenshot": "12-grep-ast-search-symbol-by-keyword.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Mutly Daemon",
+      "slug": "mutly-daemon",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Runtime metrics display",
+          "status": "PASS",
+          "durationMs": 1.9334000000017113,
+          "error": null,
+          "screenshot": "13-mutly-daemon-runtime-metrics-display.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Token Compactor",
+      "slug": "token-compactor",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Start Dream cycle",
+          "status": "PASS",
+          "durationMs": 6034.203300000001,
+          "error": null,
+          "screenshot": "14-token-compactor-start-dream-cycle.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Secure Sandbox",
+      "slug": "secure-sandbox",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Select preset command",
+          "status": "PASS",
+          "durationMs": 2.326600000000326,
+          "error": null,
+          "screenshot": "15-secure-sandbox-select-preset-command.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "Execute sandbox command",
+          "status": "PASS",
+          "durationMs": 2.500500000001921,
+          "error": null,
+          "screenshot": "16-secure-sandbox-execute-sandbox-command.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Context Injector",
+      "slug": "context-injector",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Inject anchor",
+          "status": "PASS",
+          "durationMs": 1547.5288999999975,
+          "error": null,
+          "screenshot": "17-context-injector-inject-anchor.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "IDE Integrations",
+      "slug": "ide-integrations",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "VS Code Chat prompt",
+          "status": "PASS",
+          "durationMs": 3592.9122999999963,
+          "error": null,
+          "screenshot": "18-ide-integrations-vs-code-chat-prompt.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "RPC Run Tests",
+          "status": "PASS",
+          "durationMs": 506.19830000000366,
+          "error": null,
+          "screenshot": "19-ide-integrations-rpc-run-tests.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        },
+        {
+          "name": "REST Test Endpoint",
+          "status": "PASS",
+          "durationMs": 506.91689999999653,
+          "error": null,
+          "screenshot": "20-ide-integrations-rest-test-endpoint.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Code Nexus Audit",
+      "slug": "code-nexus-audit",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Run codebase audit",
+          "status": "PASS",
+          "durationMs": 5044.873399999997,
+          "error": null,
+          "screenshot": "21-code-nexus-audit-run-codebase-audit.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "Fix simulation",
+          "status": "PASS",
+          "durationMs": 2.3944999999948777,
+          "error": null,
+          "screenshot": "22-code-nexus-audit-fix-simulation.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        }
+      ]
+    },
+    {
+      "name": "Sidebar Controls",
+      "slug": "sidebar-controls",
+      "status": "PASS",
+      "functions": [
+        {
+          "name": "Toggle Auto-Pilot ON",
+          "status": "PASS",
+          "durationMs": 2044.491399999999,
+          "error": null,
+          "screenshot": "23-sidebar-controls-toggle-auto-pilot-on.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        },
+        {
+          "name": "Toggle Auto-Pilot OFF",
+          "status": "PASS",
+          "durationMs": 3.028600000005099,
+          "error": null,
+          "screenshot": "24-sidebar-controls-toggle-auto-pilot-off.png",
+          "consoleErrors": [],
+          "networkErrors": []
+        },
+        {
+          "name": "Force Auto-Dream",
+          "status": "PASS",
+          "durationMs": 2052.8982000000033,
+          "error": null,
+          "screenshot": "25-sidebar-controls-force-auto-dream.png",
+          "consoleErrors": [
+            "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+          ],
+          "networkErrors": []
+        }
+      ]
+    }
+  ],
+  "globalConsoleErrors": [],
+  "globalNetworkErrors": [],
+  "overall": "PASS"
+}
