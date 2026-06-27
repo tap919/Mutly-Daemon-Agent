@@ -2,7 +2,7 @@
 # Mutly Daemon Agent — Multi-stage Docker build
 # Base: node:22-alpine (matches engines.node in package.json)
 # =============================================================================
-FROM node:22-alpine@sha256:c13b26e7e854e56478592d14e2835b1e5526444aa56ef2a62a8298270536d057 AS builder
+FROM node:26-alpine@sha256:725aeba2364a9b16beae49e180d83bd597dbd0b15c47f1f28875c290bfd255b9 AS builder
 
 WORKDIR /app
 
@@ -21,7 +21,7 @@ RUN npx vite build && \
     npx esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs
 
 # ---------- Stage 3: Production runtime ----------
-FROM node:22-alpine@sha256:c13b26e7e854e56478592d14e2835b1e5526444aa56ef2a62a8298270536d057 AS runtime
+FROM node:26-alpine@sha256:725aeba2364a9b16beae49e180d83bd597dbd0b15c47f1f28875c290bfd255b9 AS runtime
 
 WORKDIR /app
 
